@@ -7,6 +7,8 @@ import { initUI } from '@/ui';
 import { initCanvas } from '@/canvas';
 import { initAnnotations } from '@/annotations';
 import { initGame } from '@/game';
+import { initAuth } from '@/auth';
+import { initFirestore } from '@/db';
 
 // Prevent double injection
 if ((window as any).__OPENOVERLAY_V2__) {
@@ -22,6 +24,11 @@ if ((window as any).__OPENOVERLAY_V2__) {
       console.log('[OpenOverlay] init() called');
       console.log('[OpenOverlay] document.body exists:', !!document.body);
 
+      // Initialize Firebase (auth + database)
+      initFirestore();
+      initAuth();
+
+      // Initialize UI components
       initUI();
       initCanvas();
       initAnnotations();

@@ -3,6 +3,10 @@
  * Drawing toolbar with full controls
  */
 
+import { signInWithGoogle, signOut, onAuthStateChanged, getCurrentUser } from '@/auth';
+import { getUserProfile, followUser, unfollowUser, isFollowing, type UserProfile } from '@/db';
+import type { User } from 'firebase/auth';
+
 let shadowHost: HTMLElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
 let isMenuOpen = false;
@@ -13,6 +17,10 @@ let isEraser = false;
 let pendingText: string = '';
 let gameSubMode: 'play' | 'build' = 'build';
 let gameBuildTool: string = 'spawn';
+
+// Auth state
+let currentAuthUser: User | null = null;
+let isProfileModalOpen = false;
 
 // Quick color presets
 const QUICK_COLORS = ['#ff3366', '#3b82f6', '#22c55e', '#f59e0b'];
@@ -464,6 +472,211 @@ const STYLES = `
   .mini.game-btn.active {
     background: #22c55e;
   }
+
+  /* Profile button */
+  .mini.profile-btn {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .mini.profile-btn img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+
+  /* Profile modal */
+  .profile-modal {
+    position: fixed;
+    bottom: 80px;
+    right: 20px;
+    width: 320px;
+    background: #111;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    z-index: 2147483647;
+    pointer-events: auto;
+  }
+
+  .profile-modal.show {
+    display: flex;
+  }
+
+  .profile-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: #333;
+    color: #fff;
+    border-radius: 50%;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+
+  .profile-close:hover {
+    background: #444;
+  }
+
+  .profile-header {
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border-bottom: 1px solid #333;
+  }
+
+  .profile-avatar {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #3b82f6;
+  }
+
+  .profile-info {
+    flex: 1;
+  }
+
+  .profile-name {
+    font-size: 18px;
+    font-weight: bold;
+    color: #fff;
+    margin: 0 0 4px 0;
+  }
+
+  .profile-email {
+    font-size: 12px;
+    color: #888;
+    margin: 0;
+  }
+
+  .profile-stats {
+    display: flex;
+    gap: 20px;
+    padding: 16px 20px;
+    border-bottom: 1px solid #333;
+  }
+
+  .profile-stat {
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .profile-stat:hover {
+    opacity: 0.8;
+  }
+
+  .profile-stat-value {
+    font-size: 20px;
+    font-weight: bold;
+    color: #fff;
+  }
+
+  .profile-stat-label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+  }
+
+  .profile-bio {
+    padding: 16px 20px;
+    color: #ccc;
+    font-size: 14px;
+    border-bottom: 1px solid #333;
+  }
+
+  .profile-bio-empty {
+    color: #666;
+    font-style: italic;
+  }
+
+  .profile-actions {
+    padding: 16px 20px;
+    display: flex;
+    gap: 10px;
+  }
+
+  .profile-btn {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .profile-btn.primary {
+    background: #3b82f6;
+    color: white;
+  }
+
+  .profile-btn.primary:hover {
+    background: #2563eb;
+  }
+
+  .profile-btn.secondary {
+    background: #333;
+    color: #fff;
+  }
+
+  .profile-btn.secondary:hover {
+    background: #444;
+  }
+
+  .profile-btn.danger {
+    background: #ef4444;
+    color: white;
+  }
+
+  .profile-btn.danger:hover {
+    background: #dc2626;
+  }
+
+  .login-prompt {
+    padding: 40px 20px;
+    text-align: center;
+  }
+
+  .login-prompt p {
+    color: #888;
+    margin: 0 0 20px 0;
+  }
+
+  .login-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 24px;
+    background: #fff;
+    color: #333;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .login-btn:hover {
+    background: #f0f0f0;
+  }
+
+  .login-btn img {
+    width: 20px;
+    height: 20px;
+  }
 `;
 
 /**
@@ -532,15 +745,62 @@ export function initUI(): void {
   gameBtn.onclick = () => toggleMode('game');
   container.appendChild(gameBtn);
 
-  // Settings button
+  // Settings/Profile button (shows avatar when logged in)
   const settingsBtn = document.createElement('button');
-  settingsBtn.className = 'mini';
+  settingsBtn.className = 'mini profile-btn';
+  settingsBtn.id = 'oo-profile-btn';
   settingsBtn.textContent = '⚙️';
-  settingsBtn.title = 'Settings';
-  settingsBtn.onclick = () => console.log('Settings clicked');
+  settingsBtn.title = 'Settings & Profile';
+  settingsBtn.onclick = toggleProfileModal;
   container.appendChild(settingsBtn);
 
   shadowRoot.appendChild(container);
+
+  // Create profile modal
+  const profileModal = document.createElement('div');
+  profileModal.className = 'profile-modal';
+  profileModal.id = 'oo-profile-modal';
+  profileModal.innerHTML = `
+    <button class="profile-close" id="profile-close-btn">&times;</button>
+    <div class="login-prompt" id="login-prompt">
+      <p>Sign in to save your drawings and follow other users</p>
+      <button class="login-btn" id="google-login-btn">
+        <svg width="20" height="20" viewBox="0 0 24 24">
+          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+        </svg>
+        Sign in with Google
+      </button>
+    </div>
+    <div class="profile-content" id="profile-content" style="display: none;">
+      <div class="profile-header">
+        <img class="profile-avatar" id="profile-avatar" src="" alt="Profile">
+        <div class="profile-info">
+          <h3 class="profile-name" id="profile-name">User Name</h3>
+          <p class="profile-email" id="profile-email">email@example.com</p>
+        </div>
+      </div>
+      <div class="profile-stats">
+        <div class="profile-stat" id="followers-stat">
+          <div class="profile-stat-value" id="followers-count">0</div>
+          <div class="profile-stat-label">Followers</div>
+        </div>
+        <div class="profile-stat" id="following-stat">
+          <div class="profile-stat-value" id="following-count">0</div>
+          <div class="profile-stat-label">Following</div>
+        </div>
+      </div>
+      <div class="profile-bio" id="profile-bio">
+        <span class="profile-bio-empty">No bio yet</span>
+      </div>
+      <div class="profile-actions">
+        <button class="profile-btn danger" id="signout-btn">Sign Out</button>
+      </div>
+    </div>
+  `;
+  shadowRoot.appendChild(profileModal);
 
   // Create toolbar
   const toolbar = document.createElement('div');
@@ -881,6 +1141,105 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       }
     }
   });
+
+  // Profile modal event listeners
+  const loginBtn = shadowRoot.querySelector('#google-login-btn');
+  const signoutBtn = shadowRoot.querySelector('#signout-btn');
+  const closeBtn = shadowRoot.querySelector('#profile-close-btn');
+
+  closeBtn?.addEventListener('click', () => {
+    isProfileModalOpen = false;
+    const modal = shadowRoot?.querySelector('#oo-profile-modal');
+    modal?.classList.remove('show');
+  });
+
+  loginBtn?.addEventListener('click', async () => {
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      console.error('[OpenOverlay] Login failed:', error);
+    }
+  });
+
+  signoutBtn?.addEventListener('click', async () => {
+    try {
+      await signOut();
+      isProfileModalOpen = false;
+      const modal = shadowRoot?.querySelector('#oo-profile-modal');
+      modal?.classList.remove('show');
+    } catch (error) {
+      console.error('[OpenOverlay] Sign out failed:', error);
+    }
+  });
+
+  // Listen for auth state changes
+  onAuthStateChanged((user) => {
+    currentAuthUser = user;
+    updateProfileUI(user);
+  });
+}
+
+/**
+ * Update profile UI based on auth state
+ */
+function updateProfileUI(user: User | null): void {
+  const profileBtn = shadowRoot?.querySelector('#oo-profile-btn') as HTMLElement;
+  const loginPrompt = shadowRoot?.querySelector('#login-prompt') as HTMLElement;
+  const profileContent = shadowRoot?.querySelector('#profile-content') as HTMLElement;
+
+  if (!profileBtn || !loginPrompt || !profileContent) return;
+
+  if (user) {
+    // User is signed in - show avatar
+    if (user.photoURL) {
+      profileBtn.innerHTML = `<img src="${user.photoURL}" alt="Profile">`;
+    } else {
+      profileBtn.textContent = user.displayName?.charAt(0).toUpperCase() || '👤';
+    }
+
+    // Update profile content
+    loginPrompt.style.display = 'none';
+    profileContent.style.display = 'block';
+
+    const avatar = shadowRoot?.querySelector('#profile-avatar') as HTMLImageElement;
+    const name = shadowRoot?.querySelector('#profile-name') as HTMLElement;
+    const email = shadowRoot?.querySelector('#profile-email') as HTMLElement;
+
+    if (avatar) avatar.src = user.photoURL || '';
+    if (name) name.textContent = user.displayName || 'Anonymous';
+    if (email) email.textContent = user.email || '';
+
+    // Fetch full profile for stats
+    getUserProfile(user.uid).then(profile => {
+      if (profile) {
+        const followersCount = shadowRoot?.querySelector('#followers-count') as HTMLElement;
+        const followingCount = shadowRoot?.querySelector('#following-count') as HTMLElement;
+        const bio = shadowRoot?.querySelector('#profile-bio') as HTMLElement;
+
+        if (followersCount) followersCount.textContent = String(profile.followersCount || 0);
+        if (followingCount) followingCount.textContent = String(profile.followingCount || 0);
+        if (bio) {
+          bio.innerHTML = profile.bio
+            ? profile.bio
+            : '<span class="profile-bio-empty">No bio yet</span>';
+        }
+      }
+    });
+  } else {
+    // User is signed out - show default icon
+    profileBtn.textContent = '👤';
+    loginPrompt.style.display = 'block';
+    profileContent.style.display = 'none';
+  }
+}
+
+/**
+ * Toggle profile modal visibility
+ */
+function toggleProfileModal(): void {
+  isProfileModalOpen = !isProfileModalOpen;
+  const modal = shadowRoot?.querySelector('#oo-profile-modal');
+  modal?.classList.toggle('show', isProfileModalOpen);
 }
 
 function dispatchSettingsChange(): void {

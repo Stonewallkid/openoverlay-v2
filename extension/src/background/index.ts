@@ -62,6 +62,7 @@ function handleMessage(
 
 /**
  * Handle Google Sign-In request.
+ * Returns the OAuth token for Firebase authentication.
  */
 async function handleGoogleSignIn(
   sendResponse: (response: any) => void
@@ -80,27 +81,8 @@ async function handleGoogleSignIn(
       });
     });
 
-    // Exchange Google token for our API token
-    const response = await fetch(`${API_URL}/auth/google`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Authentication failed');
-    }
-
-    const data = await response.json();
-
-    // Store user and token
-    await chrome.storage.local.set({
-      oo_user: data.user,
-      oo_token: data.token,
-    });
-
-    sendResponse({ success: true, user: data.user });
+    console.log('[OpenOverlay BG] Got OAuth token');
+    sendResponse({ success: true, token });
   } catch (error: any) {
     console.error('[OpenOverlay BG] Sign-in error:', error);
     sendResponse({ success: false, error: error.message });

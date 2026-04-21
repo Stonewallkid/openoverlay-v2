@@ -14,7 +14,7 @@
     "https://*/*"
   ],
   "oauth2": {
-    "client_id": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+    "client_id": "951272023115-6mjjv92nb35j5csb401ai9scv6iiq2k9.apps.googleusercontent.com",
     "scopes": [
       "openid",
       "email",
