@@ -42,6 +42,9 @@ let player: Player = {
   maxJumps: 2,
 };
 
+// Track landing for slide effect
+let wasOnGround = false;
+let landingSlideFrames = 0;
 
 // Course elements
 interface Checkpoint {
@@ -75,9 +78,9 @@ let currentCourse: Course = {
 
 // Game physics
 const GRAVITY = 0.6;
-const JUMP_FORCE = -14;
-const MOVE_SPEED = 5;
-const FRICTION = 0.85;
+const JUMP_FORCE = -12;
+const MOVE_SPEED = 3;
+const FRICTION = 0.75; // Quick stop when not pressing keys
 
 // Input state
 const keys: { [key: string]: boolean } = {};
@@ -167,6 +170,9 @@ export function initGame(): void {
   gameCanvas.addEventListener('pointerdown', onPointerDown);
   gameCanvas.addEventListener('pointermove', onPointerMove);
   gameCanvas.addEventListener('pointerup', onPointerUp);
+  gameCanvas.addEventListener('contextmenu', (e) => {
+    if (gameMode === 'build') e.preventDefault();
+  });
 
   // Load saved course
   loadCourse();
@@ -470,9 +476,14 @@ function update(dt: number): void {
     player.vx = MOVE_SPEED;
     player.facingRight = true;
   } else {
-    player.vx *= FRICTION;
+    // Use slower friction during landing slide, faster otherwise
+    const friction = landingSlideFrames > 0 ? 0.92 : FRICTION;
+    player.vx *= friction;
     if (Math.abs(player.vx) < 0.1) player.vx = 0;
   }
+
+  // Decrease landing slide frames
+  if (landingSlideFrames > 0) landingSlideFrames--;
 
   // Double jump logic - only trigger on key press, not hold
   const jumpKeyPressed = keys['ArrowUp'] || keys['KeyW'] || keys['Space'];
@@ -601,11 +612,18 @@ function update(dt: number): void {
 
   // Land on the best floor found
   if (bestFloorY < Infinity) {
+    // Check if just landed (wasn't on ground before)
+    if (!wasOnGround && Math.abs(player.vx) > 0.5) {
+      landingSlideFrames = 8; // Slide for 8 frames
+    }
     player.y = bestFloorY - player.height;
     player.vy = 0;
     player.onGround = true;
     player.jumpsRemaining = player.maxJumps;
   }
+
+  // Track ground state for next frame
+  wasOnGround = player.onGround;
 
   // No floor - player can fall to death
   // Check if player fell too far below the page OR off the sides
@@ -840,24 +858,32 @@ function drawCheckpoint(checkpoint: Checkpoint): void {
     gameCtx.fillText('SPAWN', x, y + 5);
 
   } else {
-    // Checkpoint ring
-    const ringColor = checkpoint.reached ? '#fbbf24' : '#3b82f6';
+    // Checkpoint flag (blue/gold)
+    const flagColor = checkpoint.reached ? '#fbbf24' : '#3b82f6';
 
-    gameCtx.strokeStyle = ringColor;
+    // Pole
+    gameCtx.strokeStyle = '#444';
     gameCtx.lineWidth = 4;
     gameCtx.beginPath();
-    gameCtx.arc(x, y - 15, 18, 0, Math.PI * 2);
+    gameCtx.moveTo(x, y);
+    gameCtx.lineTo(x, y - 50);
     gameCtx.stroke();
 
-    gameCtx.fillStyle = ringColor + '30';
+    // Flag
+    gameCtx.fillStyle = flagColor;
+    gameCtx.beginPath();
+    gameCtx.moveTo(x, y - 50);
+    gameCtx.lineTo(x + 35, y - 40);
+    gameCtx.lineTo(x, y - 30);
+    gameCtx.closePath();
     gameCtx.fill();
 
-    // Number
+    // Number on flag
     gameCtx.fillStyle = '#fff';
-    gameCtx.font = 'bold 14px sans-serif';
+    gameCtx.font = 'bold 12px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
-    gameCtx.fillText(String(checkpoint.order), x, y - 15);
+    gameCtx.fillText(String(checkpoint.order), x + 15, y - 40);
   }
 
   gameCtx.restore();
@@ -1208,13 +1234,41 @@ function onKeyUp(e: KeyboardEvent): void {
 }
 
 // Building handlers
+let draggingCheckpoint: Checkpoint | null = null;
+
+function findCheckpointAt(x: number, y: number): Checkpoint | null {
+  for (const checkpoint of currentCourse.checkpoints) {
+    const dist = Math.hypot(x - checkpoint.x, y - checkpoint.y);
+    if (dist < 40) return checkpoint;
+  }
+  return null;
+}
+
 function onPointerDown(e: PointerEvent): void {
   if (gameMode !== 'build') return;
 
   const x = e.pageX;
   const y = e.pageY;
 
-  // Place checkpoint/spawn marker
+  // Check if clicking on existing checkpoint
+  const clickedCheckpoint = findCheckpointAt(x, y);
+
+  if (clickedCheckpoint) {
+    // Right-click or shift-click to delete
+    if (e.button === 2 || e.shiftKey) {
+      currentCourse.checkpoints = currentCourse.checkpoints.filter(c => c.id !== clickedCheckpoint.id);
+      saveCourse();
+      render();
+      return;
+    }
+
+    // Start dragging
+    draggingCheckpoint = clickedCheckpoint;
+    if (gameCanvas) gameCanvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  // Place new checkpoint/spawn marker
   const type = buildTool as 'start' | 'finish' | 'checkpoint' | 'spawn';
 
   // Remove existing start/finish/spawn if placing new one (only one allowed)
@@ -1240,12 +1294,23 @@ function onPointerDown(e: PointerEvent): void {
   render();
 }
 
-function onPointerMove(_e: PointerEvent): void {
-  // No longer used for platform drawing
+function onPointerMove(e: PointerEvent): void {
+  if (gameMode !== 'build') return;
+
+  // Handle dragging
+  if (draggingCheckpoint) {
+    draggingCheckpoint.x = e.pageX;
+    draggingCheckpoint.y = e.pageY;
+    render();
+  }
 }
 
 function onPointerUp(_e: PointerEvent): void {
-  // No longer used for platform creation
+  if (draggingCheckpoint) {
+    saveCourse();
+    draggingCheckpoint = null;
+    if (gameCanvas) gameCanvas.style.cursor = 'crosshair';
+  }
 }
 
 function generateId(): string {

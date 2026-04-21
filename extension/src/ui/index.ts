@@ -621,7 +621,7 @@ export function initUI(): void {
     <!-- Size -->
     <div class="toolbar-section">
       <label>Size</label>
-      <input type="range" id="oo-size" min="1" max="80" value="24">
+      <input type="range" id="oo-size" min="1" max="200" value="24">
       <span class="size-display" id="oo-size-display">24</span>
     </div>
 
@@ -868,11 +868,11 @@ function setMode(mode: 'none' | 'draw' | 'text' | 'game'): void {
   if (sizeInput && sizeDisplay) {
     if (mode === 'text') {
       sizeInput.value = '32';
-      sizeInput.max = '120';
+      sizeInput.max = '300';
       sizeDisplay.textContent = '32';
     } else if (mode === 'draw') {
       sizeInput.value = '4';
-      sizeInput.max = '50';
+      sizeInput.max = '150';
       sizeDisplay.textContent = '4';
     }
   }
