@@ -120,6 +120,24 @@ const STYLES = `
     pointer-events: auto;
     flex-wrap: wrap;
     max-width: 500px;
+    z-index: 2147483647;
+  }
+
+  .toolbar-drag-handle {
+    cursor: grab;
+    padding: 4px 8px;
+    margin: -4px 0 -4px -8px;
+    color: #666;
+    font-size: 14px;
+    user-select: none;
+  }
+
+  .toolbar-drag-handle:hover {
+    color: #999;
+  }
+
+  .toolbar-drag-handle:active {
+    cursor: grabbing;
   }
 
   .toolbar.show {
@@ -411,19 +429,22 @@ const STYLES = `
   }
 
   .game-tools {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
     gap: 4px;
+    max-width: 320px;
   }
 
   .game-tool-btn {
-    padding: 6px 10px;
+    padding: 4px 6px;
     border: none;
     background: #222;
     color: #aaa;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
     transition: background 0.1s;
+    white-space: nowrap;
   }
 
   .game-tool-btn:hover {
@@ -528,6 +549,9 @@ export function initUI(): void {
 
   // Build toolbar HTML
   toolbar.innerHTML = `
+    <!-- DRAG HANDLE -->
+    <div class="toolbar-drag-handle" id="oo-drag-handle" title="Drag to move">⠿</div>
+
     <!-- DRAW MODE CONTROLS -->
     <div class="draw-controls active" id="draw-controls">
       <!-- Brush Styles -->
@@ -592,10 +616,15 @@ export function initUI(): void {
       <!-- Build Tools (only shown in build mode) -->
       <div class="toolbar-section build-tools-section">
         <div class="game-tools" id="game-tools">
+          <button class="game-tool-btn" data-tool="select" title="Select - drag to move, shift+click to delete">✋ Select</button>
           <button class="game-tool-btn active" data-tool="spawn" title="Place spawn point">👤 Spawn</button>
           <button class="game-tool-btn" data-tool="start" title="Place start flag">🏁 Start</button>
           <button class="game-tool-btn" data-tool="finish" title="Place finish flag">🏆 Finish</button>
-          <button class="game-tool-btn" data-tool="checkpoint" title="Place checkpoint">⭕ Check</button>
+          <button class="game-tool-btn" data-tool="checkpoint" title="Place checkpoint flag">🚩 Flag</button>
+          <button class="game-tool-btn" data-tool="trampoline" title="Bouncy pad">🔶 Bounce</button>
+          <button class="game-tool-btn" data-tool="speedBoost" title="Speed boost (3 sec)">💨 Speed</button>
+          <button class="game-tool-btn" data-tool="highJump" title="Next jump is higher">🦘 Jump</button>
+          <button class="game-tool-btn" data-tool="spike" title="Deadly spikes">🔺 Spike</button>
         </div>
       </div>
 
@@ -804,6 +833,53 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
         detail: { mode: gameSubMode, tool }
       }));
     });
+  });
+
+  // Drag functionality
+  const dragHandle = toolbar.querySelector('#oo-drag-handle');
+  let isDragging = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let toolbarStartX = 0;
+  let toolbarStartY = 0;
+
+  dragHandle?.addEventListener('pointerdown', (e: Event) => {
+    const pe = e as PointerEvent;
+    isDragging = true;
+    dragStartX = pe.clientX;
+    dragStartY = pe.clientY;
+
+    const rect = toolbar.getBoundingClientRect();
+    toolbarStartX = rect.left;
+    toolbarStartY = rect.top;
+
+    // Switch to position-based layout
+    toolbar.style.right = 'auto';
+    toolbar.style.bottom = 'auto';
+    toolbar.style.left = `${rect.left}px`;
+    toolbar.style.top = `${rect.top}px`;
+
+    (dragHandle as HTMLElement).style.cursor = 'grabbing';
+    pe.preventDefault();
+  });
+
+  document.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!isDragging) return;
+
+    const dx = e.clientX - dragStartX;
+    const dy = e.clientY - dragStartY;
+
+    toolbar.style.left = `${toolbarStartX + dx}px`;
+    toolbar.style.top = `${toolbarStartY + dy}px`;
+  });
+
+  document.addEventListener('pointerup', () => {
+    if (isDragging) {
+      isDragging = false;
+      if (dragHandle) {
+        (dragHandle as HTMLElement).style.cursor = 'grab';
+      }
+    }
   });
 }
 

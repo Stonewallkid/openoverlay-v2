@@ -9,7 +9,7 @@ import { getCollisionSurfaces } from '@/canvas';
 let gameCanvas: HTMLCanvasElement | null = null;
 let gameCtx: CanvasRenderingContext2D | null = null;
 let gameMode: 'none' | 'play' | 'build' = 'none';
-let buildTool: 'start' | 'finish' | 'checkpoint' | 'spawn' = 'spawn';
+let buildTool: 'select' | 'start' | 'finish' | 'checkpoint' | 'spawn' | 'trampoline' | 'speedBoost' | 'highJump' | 'spike' = 'spawn';
 
 // Player
 interface Player {
@@ -49,11 +49,13 @@ let landingSlideFrames = 0;
 // Course elements
 interface Checkpoint {
   id: string;
-  type: 'start' | 'finish' | 'checkpoint' | 'spawn';
+  type: 'start' | 'finish' | 'checkpoint' | 'spawn' | 'trampoline' | 'speedBoost' | 'highJump' | 'spike';
   x: number;
   y: number;
   order: number;
   reached: boolean;
+  width?: number;   // For rectangular elements (default 60)
+  height?: number;  // For rectangular elements (default 20)
 }
 
 interface Course {
@@ -78,9 +80,9 @@ let currentCourse: Course = {
 
 // Game physics
 const GRAVITY = 0.6;
-const JUMP_FORCE = -12;
-const MOVE_SPEED = 3;
-const FRICTION = 0.75; // Quick stop when not pressing keys
+const JUMP_FORCE = -14;
+const MOVE_SPEED = 5;
+const FRICTION = 0.7; // Quick stop when not pressing keys
 
 // Input state
 const keys: { [key: string]: boolean } = {};
@@ -102,6 +104,10 @@ let isDead = false;
 let deathTime = 0;
 const RESPAWN_DELAY = 2000; // 2 seconds
 const DEATH_Y_THRESHOLD = 2000; // Fall this far below viewport to die
+
+// Power-up state
+let speedBoostEndTime = 0;    // Timestamp when speed boost ends
+let hasHighJumpBoost = false; // Consumed on next jump
 
 // Game modes: 'explore' = no timer/lives, 'race' = timer + limited lives
 let playMode: 'explore' | 'race' = 'explore';
@@ -165,6 +171,23 @@ export function initGame(): void {
   document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
     setGameMode(e.detail.mode, e.detail.tool, e.detail.playmode);
   }) as EventListener);
+
+  // Listen for undo/clear in build mode
+  document.addEventListener('oo:undo', () => {
+    if (gameMode === 'build' && currentCourse.checkpoints.length > 0) {
+      currentCourse.checkpoints.pop();
+      saveCourse();
+      render();
+    }
+  });
+
+  document.addEventListener('oo:clear', () => {
+    if (gameMode === 'build') {
+      currentCourse.checkpoints = [];
+      saveCourse();
+      render();
+    }
+  });
 
   // Mouse events for building
   gameCanvas.addEventListener('pointerdown', onPointerDown);
@@ -468,12 +491,15 @@ function update(dt: number): void {
     notification = null;
   }
 
-  // Handle input
+  // Handle input (with speed boost check)
+  const isSpeedBoosted = performance.now() < speedBoostEndTime;
+  const currentMoveSpeed = isSpeedBoosted ? MOVE_SPEED * 2 : MOVE_SPEED;
+
   if (keys['ArrowLeft'] || keys['KeyA']) {
-    player.vx = -MOVE_SPEED;
+    player.vx = -currentMoveSpeed;
     player.facingRight = false;
   } else if (keys['ArrowRight'] || keys['KeyD']) {
-    player.vx = MOVE_SPEED;
+    player.vx = currentMoveSpeed;
     player.facingRight = true;
   } else {
     // Use slower friction during landing slide, faster otherwise
@@ -488,9 +514,12 @@ function update(dt: number): void {
   // Double jump logic - only trigger on key press, not hold
   const jumpKeyPressed = keys['ArrowUp'] || keys['KeyW'] || keys['Space'];
   if (jumpKeyPressed && !jumpKeyWasPressed && player.jumpsRemaining > 0) {
-    player.vy = JUMP_FORCE;
+    // Apply high jump boost if available
+    const jumpForce = hasHighJumpBoost ? JUMP_FORCE * 1.5 : JUMP_FORCE;
+    player.vy = jumpForce;
     player.onGround = false;
     player.jumpsRemaining--;
+    hasHighJumpBoost = false; // Consume the boost
   }
   jumpKeyWasPressed = jumpKeyPressed;
 
@@ -646,6 +675,9 @@ function update(dt: number): void {
   // Check checkpoints
   checkCheckpoints();
 
+  // Check game elements (trampolines, speed boosts, etc.)
+  checkGameElements();
+
   // Update race time
   if (raceStarted && playMode === 'race') {
     raceTime = performance.now() - raceStartTime;
@@ -666,6 +698,8 @@ function checkCheckpoints(): void {
   // Only track checkpoints in race mode
   if (playMode !== 'race') return;
 
+  const totalCheckpoints = currentCourse.checkpoints.filter(c => c.type === 'checkpoint').length;
+
   for (const checkpoint of currentCourse.checkpoints) {
     if (checkpoint.reached) continue;
 
@@ -680,34 +714,94 @@ function checkCheckpoints(): void {
         checkpoint.reached = true;
         console.log('[OpenOverlay] Race started!');
       } else if (checkpoint.type === 'checkpoint' && raceStarted) {
-        checkpoint.reached = true;
-        checkpointCount++;
-        console.log('[OpenOverlay] Checkpoint', checkpointCount, 'reached!');
+        // Checkpoints must be reached in order!
+        const nextCheckpointOrder = checkpointCount + 1;
+        if (checkpoint.order === nextCheckpointOrder) {
+          checkpoint.reached = true;
+          checkpointCount++;
+          console.log('[OpenOverlay] Checkpoint', checkpointCount, 'of', totalCheckpoints, 'reached!');
+          showNotification(`Flag ${checkpointCount}/${totalCheckpoints}`, '', 1500);
+        }
       } else if (checkpoint.type === 'finish' && raceStarted) {
-        checkpoint.reached = true;
-        raceStarted = false;
-        finishTime = raceTime;
-        console.log('[OpenOverlay] Race finished! Time:', (finishTime / 1000).toFixed(2) + 's');
+        // Must have collected ALL checkpoints to finish
+        if (checkpointCount >= totalCheckpoints) {
+          checkpoint.reached = true;
+          raceStarted = false;
+          finishTime = raceTime;
+          console.log('[OpenOverlay] Race finished! Time:', (finishTime / 1000).toFixed(2) + 's');
 
-        // Check for best time
-        if (!currentCourse.bestTime || finishTime < currentCourse.bestTime) {
-          currentCourse.bestTime = finishTime;
-          saveCourse();
+          // Check for best time
+          if (!currentCourse.bestTime || finishTime < currentCourse.bestTime) {
+            currentCourse.bestTime = finishTime;
+            saveCourse();
+          }
+
+          // Remove restart button on finish
+          removeRestartButton();
+
+          // Show finish modal for name entry
+          showingFinishModal = true;
+          if (gameCanvas) {
+            gameCanvas.style.pointerEvents = 'auto';
+          }
+
+          // Dispatch finish event
+          document.dispatchEvent(new CustomEvent('oo:racefinish', {
+            detail: { time: finishTime, bestTime: currentCourse.bestTime }
+          }));
         }
+      }
+    }
+  }
+}
 
-        // Remove restart button on finish
-        removeRestartButton();
+function checkGameElements(): void {
+  for (const element of currentCourse.checkpoints) {
+    // Only check interactive game elements
+    if (!['trampoline', 'speedBoost', 'highJump', 'spike'].includes(element.type)) continue;
 
-        // Show finish modal for name entry
-        showingFinishModal = true;
-        if (gameCanvas) {
-          gameCanvas.style.pointerEvents = 'auto';
-        }
+    const elemWidth = element.width || 60;
+    const elemHeight = element.height || 20;
 
-        // Dispatch finish event
-        document.dispatchEvent(new CustomEvent('oo:racefinish', {
-          detail: { time: finishTime, bestTime: currentCourse.bestTime }
-        }));
+    // AABB collision - element is positioned at bottom center
+    const elemLeft = element.x - elemWidth / 2;
+    const elemRight = element.x + elemWidth / 2;
+    const elemTop = element.y - elemHeight;
+    const elemBottom = element.y;
+
+    const playerLeft = player.x;
+    const playerRight = player.x + player.width;
+    const playerTop = player.y;
+    const playerBottom = player.y + player.height;
+
+    // Check collision
+    if (playerRight > elemLeft && playerLeft < elemRight &&
+        playerBottom > elemTop && playerTop < elemBottom) {
+
+      switch (element.type) {
+        case 'trampoline':
+          // Only bounce if coming from above
+          if (player.vy > 0) {
+            player.vy = -20; // Strong upward bounce
+            player.onGround = false;
+            player.jumpsRemaining = player.maxJumps; // Reset jumps
+          }
+          break;
+
+        case 'speedBoost':
+          speedBoostEndTime = performance.now() + 3000; // 3 second boost
+          break;
+
+        case 'highJump':
+          hasHighJumpBoost = true;
+          break;
+
+        case 'spike':
+          // Spikes kill the player
+          if (!isDead) {
+            handleDeath();
+          }
+          break;
       }
     }
   }
@@ -718,7 +812,7 @@ function render(): void {
 
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
 
-  // Draw checkpoints
+  // Draw checkpoints and game elements
   for (const checkpoint of currentCourse.checkpoints) {
     drawCheckpoint(checkpoint);
   }
@@ -857,7 +951,112 @@ function drawCheckpoint(checkpoint: Checkpoint): void {
     gameCtx.textAlign = 'center';
     gameCtx.fillText('SPAWN', x, y + 5);
 
-  } else {
+  } else if (checkpoint.type === 'trampoline') {
+    // Orange bouncy pad
+    const w = checkpoint.width || 60;
+    const h = checkpoint.height || 20;
+
+    // Base pad
+    gameCtx.fillStyle = '#f97316';
+    gameCtx.fillRect(x - w/2, y - h, w, h);
+
+    // Border
+    gameCtx.strokeStyle = '#c2410c';
+    gameCtx.lineWidth = 2;
+    gameCtx.strokeRect(x - w/2, y - h, w, h);
+
+    // Springs (zigzag pattern)
+    gameCtx.strokeStyle = '#c2410c';
+    gameCtx.lineWidth = 2;
+    const springCount = 3;
+    const springWidth = w / springCount;
+    for (let i = 0; i < springCount; i++) {
+      const sx = x - w/2 + springWidth/2 + i * springWidth;
+      gameCtx.beginPath();
+      gameCtx.moveTo(sx, y);
+      gameCtx.lineTo(sx - 4, y - h/3);
+      gameCtx.lineTo(sx + 4, y - h*2/3);
+      gameCtx.lineTo(sx, y - h);
+      gameCtx.stroke();
+    }
+
+  } else if (checkpoint.type === 'speedBoost') {
+    // Blue ground pad with arrows
+    const w = checkpoint.width || 60;
+    const h = checkpoint.height || 20;
+
+    // Base pad
+    const isActive = performance.now() < speedBoostEndTime;
+    gameCtx.fillStyle = isActive ? '#60a5fa' : '#3b82f6';
+    gameCtx.fillRect(x - w/2, y - h, w, h);
+
+    // Border
+    gameCtx.strokeStyle = '#1d4ed8';
+    gameCtx.lineWidth = 2;
+    gameCtx.strokeRect(x - w/2, y - h, w, h);
+
+    // Arrows
+    gameCtx.fillStyle = '#fff';
+    gameCtx.font = 'bold 14px sans-serif';
+    gameCtx.textAlign = 'center';
+    gameCtx.textBaseline = 'middle';
+    gameCtx.fillText('>>', x, y - h/2);
+
+  } else if (checkpoint.type === 'highJump') {
+    // Green spring pad
+    const w = checkpoint.width || 60;
+    const h = checkpoint.height || 20;
+
+    // Base pad
+    const isActive = hasHighJumpBoost;
+    gameCtx.fillStyle = isActive ? '#86efac' : '#22c55e';
+    gameCtx.fillRect(x - w/2, y - h, w, h);
+
+    // Border
+    gameCtx.strokeStyle = '#15803d';
+    gameCtx.lineWidth = 2;
+    gameCtx.strokeRect(x - w/2, y - h, w, h);
+
+    // Up arrow
+    gameCtx.fillStyle = '#fff';
+    gameCtx.font = 'bold 16px sans-serif';
+    gameCtx.textAlign = 'center';
+    gameCtx.textBaseline = 'middle';
+    gameCtx.fillText('^', x, y - h/2);
+
+  } else if (checkpoint.type === 'spike') {
+    // Red triangular spikes
+    const w = checkpoint.width || 60;
+    const h = checkpoint.height || 30;
+
+    const spikeCount = 4;
+    const spikeW = w / spikeCount;
+
+    gameCtx.fillStyle = '#ef4444';
+    for (let i = 0; i < spikeCount; i++) {
+      const sx = x - w/2 + i * spikeW;
+      gameCtx.beginPath();
+      gameCtx.moveTo(sx, y);
+      gameCtx.lineTo(sx + spikeW/2, y - h);
+      gameCtx.lineTo(sx + spikeW, y);
+      gameCtx.closePath();
+      gameCtx.fill();
+    }
+
+    // Dark outline
+    gameCtx.strokeStyle = '#991b1b';
+    gameCtx.lineWidth = 1;
+    for (let i = 0; i < spikeCount; i++) {
+      const sx = x - w/2 + i * spikeW;
+      gameCtx.beginPath();
+      gameCtx.moveTo(sx, y);
+      gameCtx.lineTo(sx + spikeW/2, y - h);
+      gameCtx.lineTo(sx + spikeW, y);
+      gameCtx.closePath();
+      gameCtx.stroke();
+    }
+
+  } else if (checkpoint.type === 'checkpoint') {
     // Checkpoint flag (blue/gold)
     const flagColor = checkpoint.reached ? '#fbbf24' : '#3b82f6';
 
@@ -1238,8 +1437,20 @@ let draggingCheckpoint: Checkpoint | null = null;
 
 function findCheckpointAt(x: number, y: number): Checkpoint | null {
   for (const checkpoint of currentCourse.checkpoints) {
-    const dist = Math.hypot(x - checkpoint.x, y - checkpoint.y);
-    if (dist < 40) return checkpoint;
+    // For rectangular elements, use AABB check
+    if (checkpoint.width && checkpoint.height) {
+      const left = checkpoint.x - checkpoint.width / 2;
+      const right = checkpoint.x + checkpoint.width / 2;
+      const top = checkpoint.y - checkpoint.height;
+      const bottom = checkpoint.y;
+      if (x >= left && x <= right && y >= top && y <= bottom) {
+        return checkpoint;
+      }
+    } else {
+      // For flags/points, use distance-based check
+      const dist = Math.hypot(x - checkpoint.x, y - checkpoint.y);
+      if (dist < 40) return checkpoint;
+    }
   }
   return null;
 }
@@ -1262,33 +1473,50 @@ function onPointerDown(e: PointerEvent): void {
       return;
     }
 
-    // Start dragging
+    // Start dragging (in select mode or any mode when clicking existing element)
     draggingCheckpoint = clickedCheckpoint;
     if (gameCanvas) gameCanvas.style.cursor = 'grabbing';
     return;
   }
 
-  // Place new checkpoint/spawn marker
-  const type = buildTool as 'start' | 'finish' | 'checkpoint' | 'spawn';
+  // In select mode, don't place anything if not clicking on existing element
+  if (buildTool === 'select') return;
+
+  // Place new element
+  const type = buildTool as Checkpoint['type'];
 
   // Remove existing start/finish/spawn if placing new one (only one allowed)
   if (type === 'start' || type === 'finish' || type === 'spawn') {
     currentCourse.checkpoints = currentCourse.checkpoints.filter(c => c.type !== type);
   }
 
+  // Calculate order for race elements
   const order = type === 'start' ? 0 :
                 type === 'finish' ? 999 :
                 type === 'spawn' ? -1 :
-                currentCourse.checkpoints.filter(c => c.type === 'checkpoint').length + 1;
+                type === 'checkpoint' ? currentCourse.checkpoints.filter(c => c.type === 'checkpoint').length + 1 :
+                0; // Game elements don't need order
 
-  currentCourse.checkpoints.push({
+  // Create the element
+  const newElement: Checkpoint = {
     id: generateId(),
     type,
     x,
     y,
     order,
     reached: false,
-  });
+  };
+
+  // Add size for game elements
+  if (type === 'trampoline' || type === 'speedBoost' || type === 'highJump') {
+    newElement.width = 60;
+    newElement.height = 20;
+  } else if (type === 'spike') {
+    newElement.width = 60;
+    newElement.height = 30;
+  }
+
+  currentCourse.checkpoints.push(newElement);
 
   saveCourse();
   render();

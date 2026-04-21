@@ -9,6 +9,7 @@ let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
 let isDrawing = false;
 let currentMode: 'none' | 'draw' | 'text' = 'none';
+let isGameMode = false;
 
 // Stroke with element-relative coordinates
 interface Stroke {
@@ -178,6 +179,11 @@ export function initCanvas(): void {
   document.addEventListener('oo:cancel', cancelDrawing);
   document.addEventListener('oo:undo', undoStroke);
   document.addEventListener('oo:clear', clearStrokes);
+
+  // Track game mode to avoid canvas undo/clear when in game
+  document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
+    isGameMode = e.detail.mode === 'build';
+  }) as EventListener);
 
   // Listen for settings changes to update selected text
   document.addEventListener('oo:settings', ((e: CustomEvent) => {
@@ -1097,6 +1103,9 @@ function adjustColor(color: string, amount: number): string {
 }
 
 function undoStroke(): void {
+  // Skip if game mode is active - game handles its own undo
+  if (isGameMode) return;
+
   if (items.length > 0) {
     items.pop();
     redraw();
@@ -1105,6 +1114,9 @@ function undoStroke(): void {
 }
 
 function clearStrokes(): void {
+  // Skip if game mode is active - game handles its own clear
+  if (isGameMode) return;
+
   items = [];
   redraw();
   console.log('[OpenOverlay] Cleared all items');
