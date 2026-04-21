@@ -12,7 +12,7 @@ import type {
   DrawingItem,
   BrushStyle,
   TextStyle,
-} from '@shared/types';
+} from './types';
 
 // UI mode the overlay is in
 export type OverlayMode = 'none' | 'draw' | 'text' | 'annotate' | 'game';

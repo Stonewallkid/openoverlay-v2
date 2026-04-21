@@ -1,0 +1,1547 @@
+/**
+ * Annotations Module
+ * Text highlighting and commenting system
+ */
+
+interface Annotation {
+  id: string;
+  // Text selection info
+  text: string;
+  anchorSelector: string;
+  anchorOffset: number;
+  focusSelector: string;
+  focusOffset: number;
+  // Content
+  comment: string;
+  color: string;
+  // Author (placeholder for now)
+  authorId: string;
+  authorName: string;
+  // Timestamps
+  createdAt: number;
+  // Reactions/comments
+  reactions: { emoji: string; count: number; userReacted: boolean }[];
+  replies: { authorName: string; text: string; createdAt: number }[];
+}
+
+let annotations: Annotation[] = [];
+let activePopup: HTMLElement | null = null;
+let annotationHost: HTMLElement | null = null;
+let annotationRoot: ShadowRoot | null = null;
+
+const HIGHLIGHT_COLORS = ['#ffeb3b', '#ff9800', '#4caf50', '#2196f3', '#e91e63'];
+
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🔥', '👀', '💯', '🎉'];
+
+const STYLES = `
+  .oo-annotate-btn {
+    position: absolute;
+    background: #22c55e;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    z-index: 2147483646;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    transition: transform 0.1s;
+  }
+
+  .oo-annotate-btn:hover {
+    transform: scale(1.05);
+  }
+
+  .oo-annotation-form {
+    position: absolute;
+    background: #1a1a1a;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    z-index: 2147483646;
+    width: 300px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  .oo-annotation-form textarea {
+    width: 100%;
+    height: 80px;
+    background: #2a2a2a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    color: #fff;
+    padding: 10px;
+    font-size: 14px;
+    resize: none;
+    font-family: inherit;
+  }
+
+  .oo-annotation-form textarea:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+
+  .oo-annotation-form .colors {
+    display: flex;
+    gap: 6px;
+    margin: 12px 0;
+  }
+
+  .oo-annotation-form .color-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+
+  .oo-annotation-form .color-btn:hover {
+    transform: scale(1.2);
+  }
+
+  .oo-annotation-form .color-btn.active {
+    border-color: #fff;
+  }
+
+  .oo-annotation-form .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .oo-annotation-form button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .oo-annotation-form .cancel-btn {
+    background: #333;
+    color: #fff;
+  }
+
+  .oo-annotation-form .save-btn {
+    background: #22c55e;
+    color: #fff;
+  }
+
+  .oo-popup {
+    position: absolute;
+    background: #1a1a1a;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    z-index: 2147483646;
+    width: 320px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    pointer-events: auto;
+  }
+
+  .oo-popup .popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid #333;
+  }
+
+  .oo-popup .popup-header .author-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .oo-popup .popup-header .avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #333;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+    font-size: 12px;
+  }
+
+  .oo-popup .popup-header .author-name {
+    color: #fff;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .oo-popup .popup-header .timestamp {
+    color: #666;
+    font-size: 11px;
+  }
+
+  .oo-popup .popup-header .maximize-btn {
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+
+  .oo-popup .popup-header .maximize-btn:hover {
+    background: #333;
+    color: #fff;
+  }
+
+  .oo-popup .popup-comment {
+    padding: 12px;
+    color: #ddd;
+    font-size: 14px;
+    line-height: 1.4;
+    border-bottom: 1px solid #333;
+  }
+
+  .oo-popup .popup-reactions {
+    display: flex;
+    gap: 6px;
+    padding: 10px 12px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid #333;
+    position: relative;
+  }
+
+  .oo-popup .reaction {
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 14px;
+    padding: 3px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .oo-popup .reaction:hover {
+    background: #333;
+  }
+
+  .oo-popup .reaction .emoji {
+    margin-right: 3px;
+  }
+
+  .oo-popup .reaction .count {
+    color: #888;
+  }
+
+  .oo-popup .reaction.active {
+    background: #22c55e33;
+    border-color: #22c55e;
+  }
+
+  .oo-popup .add-reaction {
+    background: #1a1a1a;
+    border: 1px dashed #444;
+    color: #888;
+    font-size: 14px;
+    min-width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .oo-popup .add-reaction:hover {
+    border-color: #22c55e;
+    color: #22c55e;
+  }
+
+  .oo-popup .popup-replies {
+    max-height: 150px;
+    overflow-y: auto;
+    padding: 8px 12px;
+    border-bottom: 1px solid #333;
+  }
+
+  .oo-popup .popup-replies:empty {
+    display: none;
+  }
+
+  .oo-popup .mini-reply {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .oo-popup .mini-reply:last-child {
+    margin-bottom: 0;
+  }
+
+  .oo-popup .mini-reply .mini-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #333;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+
+  .oo-popup .mini-reply .reply-content {
+    flex: 1;
+  }
+
+  .oo-popup .mini-reply .reply-author {
+    color: #aaa;
+    font-weight: 600;
+    margin-right: 6px;
+  }
+
+  .oo-popup .mini-reply .reply-text {
+    color: #ccc;
+  }
+
+  .oo-popup .popup-reply-input {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .oo-popup .popup-reply-input input {
+    flex: 1;
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 16px;
+    padding: 8px 12px;
+    color: #fff;
+    font-size: 13px;
+  }
+
+  .oo-popup .popup-reply-input input:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+
+  .oo-popup .popup-reply-input button {
+    background: #22c55e;
+    border: none;
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .oo-popup .popup-reply-input button:hover {
+    background: #1ea34b;
+  }
+
+  .oo-popup-emoji-picker {
+    position: absolute;
+    background: #222;
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    width: 180px;
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 4px;
+  }
+
+  .oo-popup-emoji-picker .emoji-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  .oo-popup-emoji-picker .emoji-btn:hover {
+    background: #333;
+  }
+
+  .oo-comment-panel {
+    position: fixed;
+    right: 0;
+    top: 0;
+    width: 360px;
+    height: 100vh;
+    background: #111;
+    box-shadow: -4px 0 24px rgba(0,0,0,0.3);
+    z-index: 2147483646;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.2s ease-out;
+  }
+
+  .oo-comment-panel.open {
+    transform: translateX(0);
+  }
+
+  .oo-comment-panel .header {
+    padding: 16px;
+    border-bottom: 1px solid #222;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .oo-comment-panel .header h3 {
+    margin: 0;
+    color: #fff;
+    font-size: 16px;
+  }
+
+  .oo-comment-panel .close-btn {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+  }
+
+  .oo-comment-panel .highlighted-text {
+    padding: 16px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #222;
+  }
+
+  .oo-comment-panel .highlighted-text blockquote {
+    margin: 0;
+    padding-left: 12px;
+    border-left: 3px solid #22c55e;
+    color: #aaa;
+    font-style: italic;
+  }
+
+  .oo-comment-panel .main-comment {
+    padding: 16px;
+    border-bottom: 1px solid #222;
+  }
+
+  .oo-comment-panel .author-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .oo-comment-panel .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #333;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+    font-size: 14px;
+  }
+
+  .oo-comment-panel .author-name {
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .oo-comment-panel .timestamp {
+    color: #666;
+    font-size: 12px;
+  }
+
+  .oo-comment-panel .comment-text {
+    color: #ddd;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .oo-comment-panel .reactions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+
+  .oo-comment-panel .reaction {
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 16px;
+    padding: 4px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .oo-comment-panel .reaction:hover {
+    background: #333;
+  }
+
+  .oo-comment-panel .reaction .emoji {
+    margin-right: 4px;
+  }
+
+  .oo-comment-panel .reaction .count {
+    color: #888;
+  }
+
+  .oo-comment-panel .add-reaction {
+    background: #1a1a1a;
+    border: 1px dashed #444;
+    color: #888;
+    font-size: 16px;
+    min-width: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .oo-comment-panel .add-reaction:hover {
+    border-color: #22c55e;
+    color: #22c55e;
+  }
+
+  .oo-comment-panel .reaction.active {
+    background: #22c55e33;
+    border-color: #22c55e;
+  }
+
+  .oo-emoji-picker {
+    position: absolute;
+    background: #222;
+    border-radius: 12px;
+    padding: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    width: 200px;
+    z-index: 10;
+  }
+
+  .oo-emoji-picker .emoji-btn {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    font-size: 18px;
+    cursor: pointer;
+    transition: background 0.1s, transform 0.1s;
+  }
+
+  .oo-emoji-picker .emoji-btn:hover {
+    background: #333;
+    transform: scale(1.2);
+  }
+
+  .oo-comment-panel .replies-section {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .oo-comment-panel .reply {
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #222;
+  }
+
+  .oo-comment-panel .reply:last-child {
+    border-bottom: none;
+  }
+
+  .oo-comment-panel .reply-input {
+    padding: 16px;
+    border-top: 1px solid #222;
+    display: flex;
+    gap: 8px;
+  }
+
+  .oo-comment-panel .reply-input input {
+    flex: 1;
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 20px;
+    padding: 10px 16px;
+    color: #fff;
+    font-size: 14px;
+  }
+
+  .oo-comment-panel .reply-input input:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+
+  .oo-comment-panel .reply-input button {
+    background: #22c55e;
+    border: none;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    color: white;
+    font-size: 18px;
+    cursor: pointer;
+  }
+`;
+
+/**
+ * Initialize the annotations system
+ */
+export function initAnnotations(): void {
+  console.log('[OpenOverlay] initAnnotations starting...');
+
+  // Create shadow host for annotation UI
+  annotationHost = document.createElement('div');
+  annotationHost.id = 'openoverlay-annotations';
+  annotationHost.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    z-index: 2147483646;
+    pointer-events: none;
+  `;
+  annotationRoot = annotationHost.attachShadow({ mode: 'open' });
+
+  const style = document.createElement('style');
+  style.textContent = STYLES;
+  annotationRoot.appendChild(style);
+
+  document.body.appendChild(annotationHost);
+
+  // Listen for text selection
+  document.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('selectionchange', onSelectionChange);
+
+  // Load saved annotations
+  loadAnnotations();
+
+  // Apply highlights to page
+  applyHighlights();
+
+  console.log('[OpenOverlay] Annotations initialized');
+}
+
+let selectionTimeout: number | null = null;
+
+function onSelectionChange(): void {
+  // Debounce
+  if (selectionTimeout) clearTimeout(selectionTimeout);
+  selectionTimeout = window.setTimeout(() => {
+    checkSelection();
+  }, 100);
+}
+
+function onMouseUp(e: MouseEvent): void {
+  // Don't interfere with our own UI
+  if ((e.target as Element)?.closest('#openoverlay-annotations')) return;
+  if ((e.target as Element)?.closest('#openoverlay-ui')) return;
+
+  setTimeout(checkSelection, 10);
+}
+
+function checkSelection(): void {
+  const selection = window.getSelection();
+
+  if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+    hideAnnotateButton();
+    return;
+  }
+
+  const text = selection.toString().trim();
+  if (text.length < 3) {
+    hideAnnotateButton();
+    return;
+  }
+
+  // Show annotate button near selection
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+
+  showAnnotateButton(rect, selection);
+}
+
+function showAnnotateButton(rect: DOMRect, selection: Selection): void {
+  hideAnnotateButton();
+
+  if (!annotationRoot) return;
+
+  const btn = document.createElement('button');
+  btn.className = 'oo-annotate-btn';
+  btn.textContent = '+ Annotate';
+  btn.style.pointerEvents = 'auto';
+  btn.style.left = `${rect.left + window.scrollX + rect.width / 2 - 50}px`;
+  btn.style.top = `${rect.bottom + window.scrollY + 8}px`;
+
+  btn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showAnnotationForm(rect, selection);
+  };
+
+  annotationRoot.appendChild(btn);
+  activePopup = btn;
+}
+
+function hideAnnotateButton(): void {
+  if (activePopup && annotationRoot?.contains(activePopup)) {
+    activePopup.remove();
+  }
+  activePopup = null;
+}
+
+function showAnnotationForm(rect: DOMRect, selection: Selection): void {
+  hideAnnotateButton();
+
+  if (!annotationRoot) return;
+
+  const text = selection.toString().trim();
+  const range = selection.getRangeAt(0);
+
+  // Get selection anchor info for persistence
+  const anchorNode = selection.anchorNode;
+  const focusNode = selection.focusNode;
+
+  const form = document.createElement('div');
+  form.className = 'oo-annotation-form';
+  form.style.pointerEvents = 'auto';
+  form.style.left = `${Math.max(10, rect.left + window.scrollX - 50)}px`;
+  form.style.top = `${rect.bottom + window.scrollY + 8}px`;
+
+  let selectedColor = HIGHLIGHT_COLORS[0];
+
+  form.innerHTML = `
+    <textarea placeholder="Add your annotation..." autofocus></textarea>
+    <div class="colors">
+      ${HIGHLIGHT_COLORS.map((c, i) => `
+        <div class="color-btn ${i === 0 ? 'active' : ''}"
+             data-color="${c}"
+             style="background: ${c}"></div>
+      `).join('')}
+    </div>
+    <div class="actions">
+      <button class="cancel-btn">Cancel</button>
+      <button class="save-btn">Save</button>
+    </div>
+  `;
+
+  // Color selection
+  form.querySelectorAll('.color-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      form.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedColor = (btn as HTMLElement).dataset.color || HIGHLIGHT_COLORS[0];
+    });
+  });
+
+  // Cancel
+  form.querySelector('.cancel-btn')?.addEventListener('click', () => {
+    form.remove();
+    window.getSelection()?.removeAllRanges();
+  });
+
+  // Save
+  form.querySelector('.save-btn')?.addEventListener('click', () => {
+    const textarea = form.querySelector('textarea') as HTMLTextAreaElement;
+    const comment = textarea.value.trim();
+
+    if (!comment) {
+      textarea.focus();
+      return;
+    }
+
+    // Create annotation
+    const annotation: Annotation = {
+      id: generateId(),
+      text,
+      anchorSelector: getNodeSelector(anchorNode),
+      anchorOffset: selection.anchorOffset,
+      focusSelector: getNodeSelector(focusNode),
+      focusOffset: selection.focusOffset,
+      comment,
+      color: selectedColor,
+      authorId: 'local-user',
+      authorName: 'You',
+      createdAt: Date.now(),
+      reactions: [],
+      replies: [],
+    };
+
+    annotations.push(annotation);
+    saveAnnotations();
+    applyHighlights();
+
+    form.remove();
+    window.getSelection()?.removeAllRanges();
+
+    console.log('[OpenOverlay] Annotation created:', annotation.id);
+  });
+
+  annotationRoot.appendChild(form);
+
+  // Focus textarea
+  setTimeout(() => {
+    (form.querySelector('textarea') as HTMLTextAreaElement)?.focus();
+  }, 10);
+}
+
+function getNodeSelector(node: Node | null): string {
+  if (!node) return 'body';
+
+  // Get the parent element if this is a text node
+  const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node as Element;
+  if (!element) return 'body';
+
+  // Build a selector path
+  const path: string[] = [];
+  let current: Element | null = element;
+
+  while (current && current !== document.body && current !== document.documentElement) {
+    let selector = current.tagName.toLowerCase();
+
+    if (current.id) {
+      path.unshift(`#${CSS.escape(current.id)}`);
+      break;
+    }
+
+    const parent = current.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children);
+      const index = siblings.indexOf(current) + 1;
+      selector += `:nth-child(${index})`;
+    }
+
+    path.unshift(selector);
+    current = current.parentElement;
+  }
+
+  return path.join(' > ') || 'body';
+}
+
+function generateId(): string {
+  return Math.random().toString(36).substr(2, 9);
+}
+
+/**
+ * Apply highlight styles to annotated text
+ */
+function applyHighlights(): void {
+  // Remove existing highlights
+  document.querySelectorAll('.oo-highlight').forEach(el => {
+    const parent = el.parentNode;
+    if (parent) {
+      parent.replaceChild(document.createTextNode(el.textContent || ''), el);
+      parent.normalize();
+    }
+  });
+
+  // Apply new highlights
+  for (const annotation of annotations) {
+    try {
+      highlightAnnotation(annotation);
+    } catch (e) {
+      console.warn('[OpenOverlay] Failed to highlight annotation:', annotation.id, e);
+    }
+  }
+}
+
+function highlightAnnotation(annotation: Annotation): void {
+  // Find the text in the document
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT,
+    null
+  );
+
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const textContent = node.textContent || '';
+    const index = textContent.indexOf(annotation.text);
+
+    if (index !== -1) {
+      const range = document.createRange();
+      range.setStart(node, index);
+      range.setEnd(node, index + annotation.text.length);
+
+      const highlight = document.createElement('span');
+      highlight.className = 'oo-highlight';
+      highlight.dataset.annotationId = annotation.id;
+      highlight.style.cssText = `
+        background: ${annotation.color}40;
+        border-bottom: 2px solid ${annotation.color};
+        cursor: pointer;
+        transition: background 0.15s;
+      `;
+
+      // Hover to show popup
+      highlight.addEventListener('mouseenter', (e) => {
+        highlight.style.background = `${annotation.color}60`;
+        showInteractivePopup(annotation, e as MouseEvent, highlight);
+      });
+
+      highlight.addEventListener('mouseleave', (e) => {
+        highlight.style.background = `${annotation.color}40`;
+        // Delay hiding to allow mouse to move to popup
+        schedulePopupHide();
+      });
+
+      range.surroundContents(highlight);
+      return; // Only highlight first occurrence
+    }
+  }
+}
+
+let popupElement: HTMLElement | null = null;
+let currentPopupAnnotation: Annotation | null = null;
+let popupHideTimeout: number | null = null;
+let isPopupPinned = false;
+
+function schedulePopupHide(): void {
+  if (isPopupPinned) return;
+  if (popupHideTimeout) clearTimeout(popupHideTimeout);
+  popupHideTimeout = window.setTimeout(() => {
+    hideInteractivePopup();
+  }, 150);
+}
+
+function cancelPopupHide(): void {
+  if (popupHideTimeout) {
+    clearTimeout(popupHideTimeout);
+    popupHideTimeout = null;
+  }
+}
+
+function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl?: HTMLElement): void {
+  // If same annotation popup is already open, just cancel any pending hide
+  if (popupElement && currentPopupAnnotation?.id === annotation.id) {
+    cancelPopupHide();
+    return;
+  }
+
+  cancelPopupHide();
+  hideInteractivePopup();
+  closeCommentPanel();
+  isPopupPinned = false;
+
+  if (!annotationRoot) return;
+
+  currentPopupAnnotation = annotation;
+  const timeAgo = formatTimeAgo(annotation.createdAt);
+
+  const popup = document.createElement('div');
+  popup.className = 'oo-popup';
+
+  // Position popup near click, but keep on screen
+  let left = e.pageX - 160;
+  let top = e.pageY + 15;
+
+  // Keep on screen
+  if (left < 10) left = 10;
+  if (left + 320 > window.innerWidth) left = window.innerWidth - 330;
+
+  popup.style.left = `${left}px`;
+  popup.style.top = `${top}px`;
+
+  popup.innerHTML = `
+    <div class="popup-header">
+      <div class="author-info">
+        <div class="avatar">${annotation.authorName.charAt(0).toUpperCase()}</div>
+        <div>
+          <div class="author-name">${escapeHtml(annotation.authorName)}</div>
+          <div class="timestamp">${timeAgo}</div>
+        </div>
+      </div>
+      <button class="maximize-btn" title="Open in sidebar">⛶</button>
+    </div>
+    <div class="popup-comment">${escapeHtml(annotation.comment)}</div>
+    <div class="popup-reactions" id="popup-reactions">
+      ${renderPopupReactions(annotation)}
+    </div>
+    <div class="popup-replies" id="popup-replies">
+      ${annotation.replies.slice(-3).map(reply => `
+        <div class="mini-reply">
+          <div class="mini-avatar">${reply.authorName.charAt(0).toUpperCase()}</div>
+          <div class="reply-content">
+            <span class="reply-author">${escapeHtml(reply.authorName)}</span>
+            <span class="reply-text">${escapeHtml(reply.text)}</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="popup-reply-input">
+      <input type="text" placeholder="Reply..." />
+      <button>➤</button>
+    </div>
+  `;
+
+  // Keep popup open when hovering over it
+  popup.addEventListener('mouseenter', () => {
+    cancelPopupHide();
+  });
+
+  popup.addEventListener('mouseleave', () => {
+    schedulePopupHide();
+  });
+
+  // Clicking inside popup pins it open
+  popup.addEventListener('click', (e) => {
+    e.stopPropagation();
+    isPopupPinned = true;
+    cancelPopupHide();
+  });
+
+  // Maximize button - open sidebar
+  popup.querySelector('.maximize-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    isPopupPinned = false;
+    hideInteractivePopup();
+    openCommentPanel(annotation);
+  });
+
+  // Setup reactions
+  setupPopupReactions(popup, annotation);
+
+  // Reply input
+  const replyInput = popup.querySelector('.popup-reply-input input') as HTMLInputElement;
+  const replyBtn = popup.querySelector('.popup-reply-input button');
+
+  const submitReply = () => {
+    const text = replyInput.value.trim();
+    if (!text) return;
+
+    annotation.replies.push({
+      authorName: 'You',
+      text,
+      createdAt: Date.now(),
+    });
+
+    saveAnnotations();
+
+    // Add reply to popup
+    const repliesContainer = popup.querySelector('#popup-replies');
+    if (repliesContainer) {
+      const replyHtml = `
+        <div class="mini-reply">
+          <div class="mini-avatar">Y</div>
+          <div class="reply-content">
+            <span class="reply-author">You</span>
+            <span class="reply-text">${escapeHtml(text)}</span>
+          </div>
+        </div>
+      `;
+      repliesContainer.insertAdjacentHTML('beforeend', replyHtml);
+    }
+
+    replyInput.value = '';
+  };
+
+  replyBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    submitReply();
+  });
+
+  replyInput?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      e.stopPropagation();
+      submitReply();
+    }
+  });
+
+  annotationRoot.appendChild(popup);
+  popupElement = popup;
+
+  // Focus reply input
+  setTimeout(() => replyInput?.focus(), 50);
+
+  // Close on outside click
+  setTimeout(() => {
+    document.addEventListener('click', handlePopupOutsideClick);
+  }, 10);
+}
+
+function renderPopupReactions(annotation: Annotation): string {
+  return `
+    ${annotation.reactions.map(r => `
+      <div class="reaction ${r.userReacted ? 'active' : ''}" data-emoji="${r.emoji}">
+        <span class="emoji">${r.emoji}</span>
+        <span class="count">${r.count}</span>
+      </div>
+    `).join('')}
+    <div class="reaction add-reaction" id="popup-add-reaction">😀+</div>
+  `;
+}
+
+function setupPopupReactions(popup: HTMLElement, annotation: Annotation): void {
+  const reactionsContainer = popup.querySelector('#popup-reactions') as HTMLElement;
+  if (!reactionsContainer) return;
+
+  // Toggle existing reactions
+  reactionsContainer.querySelectorAll('.reaction:not(.add-reaction)').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emoji = (btn as HTMLElement).dataset.emoji;
+      if (!emoji) return;
+
+      const reaction = annotation.reactions.find(r => r.emoji === emoji);
+      if (reaction) {
+        if (reaction.userReacted) {
+          reaction.count--;
+          reaction.userReacted = false;
+          if (reaction.count <= 0) {
+            annotation.reactions = annotation.reactions.filter(r => r.emoji !== emoji);
+          }
+        } else {
+          reaction.count++;
+          reaction.userReacted = true;
+        }
+        saveAnnotations();
+        refreshPopupReactions(popup, annotation);
+      }
+    });
+  });
+
+  // Add reaction button
+  reactionsContainer.querySelector('#popup-add-reaction')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showPopupEmojiPicker(popup, annotation, reactionsContainer);
+  });
+}
+
+function refreshPopupReactions(popup: HTMLElement, annotation: Annotation): void {
+  const container = popup.querySelector('#popup-reactions') as HTMLElement;
+  if (!container) return;
+
+  container.innerHTML = renderPopupReactions(annotation);
+  setupPopupReactions(popup, annotation);
+}
+
+let popupEmojiPicker: HTMLElement | null = null;
+
+function showPopupEmojiPicker(popup: HTMLElement, annotation: Annotation, container: HTMLElement): void {
+  hidePopupEmojiPicker();
+
+  const picker = document.createElement('div');
+  picker.className = 'oo-popup-emoji-picker';
+
+  picker.innerHTML = REACTION_EMOJIS.map(emoji => `
+    <button class="emoji-btn" data-emoji="${emoji}">${emoji}</button>
+  `).join('');
+
+  picker.querySelectorAll('.emoji-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emoji = (btn as HTMLElement).dataset.emoji;
+      if (!emoji) return;
+
+      let reaction = annotation.reactions.find(r => r.emoji === emoji);
+      if (reaction) {
+        if (!reaction.userReacted) {
+          reaction.count++;
+          reaction.userReacted = true;
+        }
+      } else {
+        annotation.reactions.push({
+          emoji,
+          count: 1,
+          userReacted: true,
+        });
+      }
+
+      saveAnnotations();
+      refreshPopupReactions(popup, annotation);
+      hidePopupEmojiPicker();
+    });
+  });
+
+  container.appendChild(picker);
+  popupEmojiPicker = picker;
+
+  setTimeout(() => {
+    document.addEventListener('click', hidePopupEmojiPickerOnOutside);
+  }, 10);
+}
+
+function hidePopupEmojiPickerOnOutside(e: MouseEvent): void {
+  if (popupEmojiPicker && !popupEmojiPicker.contains(e.target as Node)) {
+    hidePopupEmojiPicker();
+  }
+}
+
+function hidePopupEmojiPicker(): void {
+  document.removeEventListener('click', hidePopupEmojiPickerOnOutside);
+  if (popupEmojiPicker) {
+    popupEmojiPicker.remove();
+    popupEmojiPicker = null;
+  }
+}
+
+function handlePopupOutsideClick(e: MouseEvent): void {
+  // Only close on outside click if popup is pinned
+  if (isPopupPinned && popupElement && !popupElement.contains(e.target as Node)) {
+    hideInteractivePopup();
+  }
+}
+
+function hideInteractivePopup(): void {
+  cancelPopupHide();
+  document.removeEventListener('click', handlePopupOutsideClick);
+  hidePopupEmojiPicker();
+  if (popupElement) {
+    popupElement.remove();
+    popupElement = null;
+  }
+  currentPopupAnnotation = null;
+  isPopupPinned = false;
+}
+
+let commentPanel: HTMLElement | null = null;
+
+function openCommentPanel(annotation: Annotation): void {
+  hideInteractivePopup();
+  closeCommentPanel();
+
+  if (!annotationRoot) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'oo-comment-panel open';
+  panel.style.pointerEvents = 'auto';
+
+  const timeAgo = formatTimeAgo(annotation.createdAt);
+
+  panel.innerHTML = `
+    <div class="header">
+      <h3>Annotation</h3>
+      <button class="close-btn">&times;</button>
+    </div>
+    <div class="highlighted-text">
+      <blockquote>"${escapeHtml(annotation.text)}"</blockquote>
+    </div>
+    <div class="main-comment">
+      <div class="author-info">
+        <div class="avatar">${annotation.authorName.charAt(0).toUpperCase()}</div>
+        <div>
+          <div class="author-name">${escapeHtml(annotation.authorName)}</div>
+          <div class="timestamp">${timeAgo}</div>
+        </div>
+      </div>
+      <div class="comment-text">${escapeHtml(annotation.comment)}</div>
+      <div class="reactions" id="reactions-container">
+        ${annotation.reactions.map(r => `
+          <div class="reaction ${r.userReacted ? 'active' : ''}" data-emoji="${r.emoji}">
+            <span class="emoji">${r.emoji}</span>
+            <span class="count">${r.count}</span>
+          </div>
+        `).join('')}
+        <div class="reaction add-reaction" id="add-reaction-btn">😀+</div>
+      </div>
+    </div>
+    <div class="replies-section">
+      ${annotation.replies.map(reply => `
+        <div class="reply">
+          <div class="author-info">
+            <div class="avatar">${reply.authorName.charAt(0).toUpperCase()}</div>
+            <div>
+              <div class="author-name">${escapeHtml(reply.authorName)}</div>
+              <div class="timestamp">${formatTimeAgo(reply.createdAt)}</div>
+            </div>
+          </div>
+          <div class="comment-text">${escapeHtml(reply.text)}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="reply-input">
+      <input type="text" placeholder="Add a reply..." />
+      <button>➤</button>
+    </div>
+  `;
+
+  // Prevent clicks inside panel from closing it
+  panel.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+
+  // Close button
+  panel.querySelector('.close-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeCommentPanel();
+  });
+
+  // Reply input
+  const replyInput = panel.querySelector('.reply-input input') as HTMLInputElement;
+  const replyBtn = panel.querySelector('.reply-input button');
+
+  const submitReply = () => {
+    const text = replyInput.value.trim();
+    if (!text) return;
+
+    annotation.replies.push({
+      authorName: 'You',
+      text,
+      createdAt: Date.now(),
+    });
+
+    saveAnnotations();
+
+    // Refresh the replies section without reopening
+    const repliesSection = panel.querySelector('.replies-section');
+    if (repliesSection) {
+      const replyHtml = `
+        <div class="reply">
+          <div class="author-info">
+            <div class="avatar">Y</div>
+            <div>
+              <div class="author-name">You</div>
+              <div class="timestamp">just now</div>
+            </div>
+          </div>
+          <div class="comment-text">${escapeHtml(text)}</div>
+        </div>
+      `;
+      repliesSection.insertAdjacentHTML('beforeend', replyHtml);
+    }
+
+    replyInput.value = '';
+    replyInput.focus();
+  };
+
+  replyBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    submitReply();
+  });
+
+  replyInput?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      e.stopPropagation();
+      submitReply();
+    }
+  });
+
+  // Reaction handlers
+  const reactionsContainer = panel.querySelector('#reactions-container');
+
+  // Toggle existing reactions
+  panel.querySelectorAll('.reaction:not(.add-reaction)').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emoji = (btn as HTMLElement).dataset.emoji;
+      if (!emoji) return;
+
+      const reaction = annotation.reactions.find(r => r.emoji === emoji);
+      if (reaction) {
+        if (reaction.userReacted) {
+          reaction.count--;
+          reaction.userReacted = false;
+          if (reaction.count <= 0) {
+            annotation.reactions = annotation.reactions.filter(r => r.emoji !== emoji);
+          }
+        } else {
+          reaction.count++;
+          reaction.userReacted = true;
+        }
+        saveAnnotations();
+        refreshReactions(annotation, reactionsContainer as HTMLElement);
+      }
+    });
+  });
+
+  // Add reaction button
+  panel.querySelector('#add-reaction-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showEmojiPicker(annotation, e.target as HTMLElement, reactionsContainer as HTMLElement);
+  });
+
+  annotationRoot.appendChild(panel);
+  commentPanel = panel;
+
+  // Focus reply input
+  setTimeout(() => replyInput?.focus(), 100);
+
+  // Close on click outside (on the main document)
+  setTimeout(() => {
+    document.addEventListener('click', handleOutsideClick);
+  }, 50);
+}
+
+let emojiPicker: HTMLElement | null = null;
+
+function showEmojiPicker(annotation: Annotation, triggerBtn: HTMLElement, container: HTMLElement): void {
+  hideEmojiPicker();
+
+  const picker = document.createElement('div');
+  picker.className = 'oo-emoji-picker';
+
+  // Position above the add button
+  const rect = triggerBtn.getBoundingClientRect();
+  picker.style.bottom = '40px';
+  picker.style.left = '0';
+
+  picker.innerHTML = REACTION_EMOJIS.map(emoji => `
+    <button class="emoji-btn" data-emoji="${emoji}">${emoji}</button>
+  `).join('');
+
+  picker.querySelectorAll('.emoji-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emoji = (btn as HTMLElement).dataset.emoji;
+      if (!emoji) return;
+
+      // Check if this emoji already exists
+      let reaction = annotation.reactions.find(r => r.emoji === emoji);
+      if (reaction) {
+        if (!reaction.userReacted) {
+          reaction.count++;
+          reaction.userReacted = true;
+        }
+      } else {
+        annotation.reactions.push({
+          emoji,
+          count: 1,
+          userReacted: true,
+        });
+      }
+
+      saveAnnotations();
+      refreshReactions(annotation, container);
+      hideEmojiPicker();
+    });
+  });
+
+  // Add to container (position relative parent)
+  container.style.position = 'relative';
+  container.appendChild(picker);
+  emojiPicker = picker;
+
+  // Close picker on outside click
+  setTimeout(() => {
+    document.addEventListener('click', hideEmojiPickerOnOutsideClick);
+  }, 10);
+}
+
+function hideEmojiPickerOnOutsideClick(e: MouseEvent): void {
+  if (emojiPicker && !emojiPicker.contains(e.target as Node)) {
+    hideEmojiPicker();
+  }
+}
+
+function hideEmojiPicker(): void {
+  document.removeEventListener('click', hideEmojiPickerOnOutsideClick);
+  if (emojiPicker) {
+    emojiPicker.remove();
+    emojiPicker = null;
+  }
+}
+
+function refreshReactions(annotation: Annotation, container: HTMLElement): void {
+  if (!container) return;
+
+  container.innerHTML = `
+    ${annotation.reactions.map(r => `
+      <div class="reaction ${r.userReacted ? 'active' : ''}" data-emoji="${r.emoji}">
+        <span class="emoji">${r.emoji}</span>
+        <span class="count">${r.count}</span>
+      </div>
+    `).join('')}
+    <div class="reaction add-reaction" id="add-reaction-btn">😀+</div>
+  `;
+
+  // Re-attach event listeners
+  container.querySelectorAll('.reaction:not(.add-reaction)').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emoji = (btn as HTMLElement).dataset.emoji;
+      if (!emoji) return;
+
+      const reaction = annotation.reactions.find(r => r.emoji === emoji);
+      if (reaction) {
+        if (reaction.userReacted) {
+          reaction.count--;
+          reaction.userReacted = false;
+          if (reaction.count <= 0) {
+            annotation.reactions = annotation.reactions.filter(r => r.emoji !== emoji);
+          }
+        } else {
+          reaction.count++;
+          reaction.userReacted = true;
+        }
+        saveAnnotations();
+        refreshReactions(annotation, container);
+      }
+    });
+  });
+
+  container.querySelector('#add-reaction-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showEmojiPicker(annotation, e.target as HTMLElement, container);
+  });
+}
+
+function handleOutsideClick(e: MouseEvent): void {
+  if (commentPanel && !commentPanel.contains(e.target as Node)) {
+    closeCommentPanel();
+  }
+}
+
+function closeCommentPanel(): void {
+  document.removeEventListener('click', handleOutsideClick);
+  if (commentPanel) {
+    commentPanel.remove();
+    commentPanel = null;
+  }
+}
+
+function escapeHtml(text: string): string {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function formatTimeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+
+  return new Date(timestamp).toLocaleDateString();
+}
+
+function saveAnnotations(): void {
+  const pageKey = getPageKey();
+  localStorage.setItem(`oo_annotations_${pageKey}`, JSON.stringify(annotations));
+  console.log('[OpenOverlay] Saved', annotations.length, 'annotations');
+}
+
+function loadAnnotations(): void {
+  const pageKey = getPageKey();
+  const data = localStorage.getItem(`oo_annotations_${pageKey}`);
+
+  if (data) {
+    try {
+      annotations = JSON.parse(data);
+      console.log('[OpenOverlay] Loaded', annotations.length, 'annotations');
+    } catch (e) {
+      console.warn('[OpenOverlay] Failed to load annotations');
+      annotations = [];
+    }
+  }
+}
+
+function getPageKey(): string {
+  return btoa(window.location.href).slice(0, 32);
+}
