@@ -13,6 +13,8 @@ let isMenuOpen = false;
 let currentMode: 'none' | 'draw' | 'text' | 'game' = 'none';
 let currentBrush: string = 'solid';
 let currentTextStyle: string = 'normal';
+let currentShape: string = 'none'; // 'none' | 'rectangle' | 'circle' | 'line' | 'triangle' | 'star'
+let shapeFilled: boolean = false;
 let isEraser = false;
 let pendingText: string = '';
 let gameSubMode: 'play' | 'build' = 'build';
@@ -22,8 +24,13 @@ let gameBuildTool: string = 'spawn';
 let currentAuthUser: User | null = null;
 let isProfileModalOpen = false;
 
-// Quick color presets
-const QUICK_COLORS = ['#ff3366', '#3b82f6', '#22c55e', '#f59e0b'];
+// Quick color presets - expanded palette
+const QUICK_COLORS = [
+  // Row 1: Vibrant
+  '#ff3366', '#ff6b35', '#f59e0b', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
+  // Row 2: Classic + neutrals
+  '#ef4444', '#000000', '#ffffff', '#6b7280',
+];
 
 // Brush styles
 const BRUSH_STYLES = [
@@ -42,6 +49,16 @@ const TEXT_STYLES = [
   { id: 'aged', label: '🏚️', title: 'Aged' },
 ];
 
+// Shape tools
+const SHAPE_TOOLS = [
+  { id: 'none', label: '✏️', title: 'Freehand' },
+  { id: 'line', label: '╱', title: 'Line' },
+  { id: 'rectangle', label: '▢', title: 'Rectangle' },
+  { id: 'circle', label: '○', title: 'Circle' },
+  { id: 'triangle', label: '△', title: 'Triangle' },
+  { id: 'star', label: '☆', title: 'Star' },
+];
+
 const STYLES = `
   * {
     box-sizing: border-box;
@@ -58,6 +75,15 @@ const STYLES = `
     align-items: center;
     gap: 8px;
     pointer-events: auto;
+    touch-action: none;
+  }
+
+  .fab-container.dragging {
+    opacity: 0.8;
+  }
+
+  .fab-container.dragging .fab {
+    cursor: grabbing;
   }
 
   .fab {
@@ -209,12 +235,14 @@ const STYLES = `
 
   .quick-colors {
     display: flex;
-    gap: 4px;
+    flex-wrap: wrap;
+    gap: 3px;
+    max-width: 140px;
   }
 
   .quick-color {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
     border: 2px solid transparent;
     cursor: pointer;
@@ -222,11 +250,20 @@ const STYLES = `
   }
 
   .quick-color:hover {
-    transform: scale(1.2);
+    transform: scale(1.15);
   }
 
   .quick-color.active {
     border-color: #fff;
+    box-shadow: 0 0 0 1px #000;
+  }
+
+  .quick-color[data-color="#ffffff"] {
+    border-color: #ccc;
+  }
+
+  .quick-color[data-color="#000000"] {
+    border-color: #333;
   }
 
   .brush-styles {
@@ -273,6 +310,53 @@ const STYLES = `
 
   .tool-btn.active {
     background: #ef4444;
+    color: white;
+  }
+
+  .shape-tools {
+    display: flex;
+    gap: 2px;
+  }
+
+  .shape-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: #222;
+    color: #aaa;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.1s;
+  }
+
+  .shape-btn:hover {
+    background: #333;
+  }
+
+  .shape-btn.active {
+    background: #8b5cf6;
+    color: white;
+  }
+
+  .fill-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: #222;
+    color: #aaa;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    margin-left: 4px;
+  }
+
+  .fill-btn:hover {
+    background: #333;
+  }
+
+  .fill-btn.active {
+    background: #f59e0b;
     color: white;
   }
 
@@ -789,6 +873,65 @@ export function initUI(): void {
 
   shadowRoot.appendChild(container);
 
+  // FAB drag functionality
+  let fabDragging = false;
+  let fabDragStartX = 0;
+  let fabDragStartY = 0;
+  let fabStartRight = 18;
+  let fabStartBottom = 18;
+
+  // Restore saved position
+  const savedPos = localStorage.getItem('oo_fab_position');
+  if (savedPos) {
+    try {
+      const pos = JSON.parse(savedPos);
+      container.style.right = pos.right + 'px';
+      container.style.bottom = pos.bottom + 'px';
+      fabStartRight = pos.right;
+      fabStartBottom = pos.bottom;
+    } catch {}
+  }
+
+  fab.addEventListener('pointerdown', (e: PointerEvent) => {
+    // Only start drag on long press or if shift is held
+    if (e.shiftKey) {
+      e.preventDefault();
+      fabDragging = true;
+      fabDragStartX = e.clientX;
+      fabDragStartY = e.clientY;
+      const style = getComputedStyle(container);
+      fabStartRight = parseInt(style.right) || 18;
+      fabStartBottom = parseInt(style.bottom) || 18;
+      container.classList.add('dragging');
+      fab.setPointerCapture(e.pointerId);
+    }
+  });
+
+  fab.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!fabDragging) return;
+    e.preventDefault();
+    const dx = fabDragStartX - e.clientX;
+    const dy = fabDragStartY - e.clientY;
+    const newRight = Math.max(10, Math.min(window.innerWidth - 70, fabStartRight + dx));
+    const newBottom = Math.max(10, Math.min(window.innerHeight - 70, fabStartBottom + dy));
+    container.style.right = newRight + 'px';
+    container.style.bottom = newBottom + 'px';
+  });
+
+  fab.addEventListener('pointerup', (e: PointerEvent) => {
+    if (fabDragging) {
+      fabDragging = false;
+      container.classList.remove('dragging');
+      fab.releasePointerCapture(e.pointerId);
+      // Save position
+      const style = getComputedStyle(container);
+      localStorage.setItem('oo_fab_position', JSON.stringify({
+        right: parseInt(style.right) || 18,
+        bottom: parseInt(style.bottom) || 18,
+      }));
+    }
+  });
+
   // Create profile modal
   const profileModal = document.createElement('div');
   profileModal.className = 'profile-modal';
@@ -862,6 +1005,19 @@ export function initUI(): void {
       <!-- Tools -->
       <div class="toolbar-section">
         <button class="tool-btn" id="oo-eraser" title="Eraser">🧹</button>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <!-- Shape Tools -->
+      <div class="toolbar-section">
+        <div class="shape-tools" id="oo-shapes">
+          ${SHAPE_TOOLS.map(s => `
+            <button class="shape-btn ${s.id === 'none' ? 'active' : ''}"
+                    data-shape="${s.id}" title="${s.title}">${s.label}</button>
+          `).join('')}
+        </div>
+        <button class="fill-btn" id="oo-fill-toggle" title="Toggle fill">◧</button>
       </div>
 
       <div class="toolbar-divider"></div>
@@ -1028,6 +1184,26 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       btn.classList.add('active');
       dispatchSettingsChange();
     });
+  });
+
+  // Shape tool buttons
+  toolbar.querySelectorAll('.shape-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const shapeId = (btn as HTMLElement).dataset.shape || 'none';
+      currentShape = shapeId;
+      toolbar.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      dispatchSettingsChange();
+    });
+  });
+
+  // Fill toggle
+  const fillToggle = toolbar.querySelector('#oo-fill-toggle');
+  fillToggle?.addEventListener('click', () => {
+    shapeFilled = !shapeFilled;
+    fillToggle.classList.toggle('active', shapeFilled);
+    (fillToggle as HTMLElement).textContent = shapeFilled ? '◼' : '◧';
+    dispatchSettingsChange();
   });
 
   // Text input
@@ -1461,6 +1637,14 @@ export function getEraser(): boolean {
 
 export function getTextStyle(): string {
   return currentTextStyle;
+}
+
+export function getShape(): string {
+  return currentShape;
+}
+
+export function getShapeFilled(): boolean {
+  return shapeFilled;
 }
 
 export function getPendingText(): string {

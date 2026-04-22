@@ -3,7 +3,7 @@
  * Handles freehand drawing with multiple brush styles
  */
 
-import { getColor, getSize, getOpacity, getBrush, getEraser, getTextStyle, getPendingText, clearPendingText } from '@/ui';
+import { getColor, getSize, getOpacity, getBrush, getEraser, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
 import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, isFirestoreAvailable, isLoggedIn } from '@/db';
 import { onAuthStateChanged } from '@/auth';
 
@@ -43,7 +43,25 @@ interface TextItem {
   rotation?: number; // Rotation in radians
 }
 
-type DrawItem = Stroke | TextItem;
+// Shape item
+interface ShapeItem {
+  type: 'shape';
+  id: string;
+  anchorSelector: string;
+  // Start and end positions relative to anchor (0-1 range)
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  anchorBounds: { x: number; y: number; width: number; height: number };
+  shape: 'rectangle' | 'circle' | 'line' | 'triangle' | 'star';
+  color: string;
+  width: number;
+  opacity: number;
+  filled: boolean;
+}
+
+type DrawItem = Stroke | TextItem | ShapeItem;
 
 // Current user's items (editable)
 let items: DrawItem[] = [];
@@ -52,6 +70,12 @@ let otherUsersItems: DrawItem[] = [];
 
 let currentStroke: { x: number; y: number }[] = [];
 let currentAnchor: { element: Element; selector: string; bounds: DOMRect } | null = null;
+
+// Shape drawing
+let currentShape: 'none' | 'rectangle' | 'circle' | 'line' | 'triangle' | 'star' = 'none';
+let shapeStart: { x: number; y: number } | null = null;
+let shapeEnd: { x: number; y: number } | null = null;
+let shapeFilled = false;
 
 // Rainbow hue tracking
 let rainbowHue = 0;
@@ -270,7 +294,16 @@ function onPointerDown(e: PointerEvent): void {
     };
   }
 
-  currentStroke = [{ x: e.pageX, y: e.pageY }];
+  // Check if we're drawing a shape
+  const shapeType = getShape();
+  if (shapeType !== 'none') {
+    currentShape = shapeType as any;
+    shapeStart = { x: e.pageX, y: e.pageY };
+    shapeEnd = { x: e.pageX, y: e.pageY };
+    shapeFilled = getShapeFilled();
+  } else {
+    currentStroke = [{ x: e.pageX, y: e.pageY }];
+  }
 }
 
 function getTextBounds(item: TextItem): { x: number; y: number; width: number; height: number; centerX: number; centerY: number } | null {
@@ -538,6 +571,14 @@ function onPointerMove(e: PointerEvent): void {
 
   if (!isDrawing || !ctx) return;
 
+  // Handle shape drawing
+  if (currentShape !== 'none' && shapeStart) {
+    shapeEnd = { x: e.pageX, y: e.pageY };
+    redraw();
+    drawShapeLive();
+    return;
+  }
+
   currentStroke.push({ x: e.pageX, y: e.pageY });
 
   // Draw current stroke live
@@ -557,6 +598,47 @@ function onPointerUp(): void {
   if (!isDrawing) return;
 
   isDrawing = false;
+
+  // Handle shape finalization
+  if (currentShape !== 'none' && shapeStart && shapeEnd && currentAnchor) {
+    const freshRect = currentAnchor.element.getBoundingClientRect();
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+
+    const elemPageX = freshRect.left + scrollX;
+    const elemPageY = freshRect.top + scrollY;
+
+    // Convert to relative coordinates
+    const x1 = (shapeStart.x - elemPageX) / freshRect.width;
+    const y1 = (shapeStart.y - elemPageY) / freshRect.height;
+    const x2 = (shapeEnd.x - elemPageX) / freshRect.width;
+    const y2 = (shapeEnd.y - elemPageY) / freshRect.height;
+
+    items.push({
+      type: 'shape',
+      id: 'shape_' + Date.now(),
+      anchorSelector: currentAnchor.selector,
+      x1, y1, x2, y2,
+      anchorBounds: {
+        x: elemPageX,
+        y: elemPageY,
+        width: freshRect.width,
+        height: freshRect.height,
+      },
+      shape: currentShape as any,
+      color: getColor(),
+      width: getSize(),
+      opacity: getOpacity(),
+      filled: shapeFilled,
+    });
+
+    shapeStart = null;
+    shapeEnd = null;
+    currentShape = 'none';
+    currentAnchor = null;
+    redraw();
+    return;
+  }
 
   if (currentStroke.length > 1 && currentAnchor) {
     const freshRect = currentAnchor.element.getBoundingClientRect();
@@ -723,6 +805,128 @@ function drawStrokeSaved(stroke: Stroke, rect: { x: number; y: number; width: nu
   }
 
   ctx.restore();
+}
+
+/**
+ * Draw shape preview while dragging
+ */
+function drawShapeLive(): void {
+  if (!ctx || !shapeStart || !shapeEnd) return;
+
+  const color = getColor();
+  const width = getSize();
+  const opacity = getOpacity();
+  const filled = getShapeFilled();
+
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  const x1 = shapeStart.x;
+  const y1 = shapeStart.y;
+  const x2 = shapeEnd.x;
+  const y2 = shapeEnd.y;
+
+  drawShapeAtCoords(ctx, currentShape, x1, y1, x2, y2, filled);
+
+  ctx.restore();
+}
+
+/**
+ * Draw a saved shape
+ */
+function drawShapeSaved(shape: ShapeItem, rect: { x: number; y: number; width: number; height: number }): void {
+  if (!ctx) return;
+
+  // Convert relative to absolute coords
+  const x1 = rect.x + shape.x1 * rect.width;
+  const y1 = rect.y + shape.y1 * rect.height;
+  const x2 = rect.x + shape.x2 * rect.width;
+  const y2 = rect.y + shape.y2 * rect.height;
+
+  ctx.save();
+  ctx.globalAlpha = shape.opacity;
+  ctx.strokeStyle = shape.color;
+  ctx.fillStyle = shape.color;
+  ctx.lineWidth = shape.width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  drawShapeAtCoords(ctx, shape.shape, x1, y1, x2, y2, shape.filled);
+
+  ctx.restore();
+}
+
+/**
+ * Draw a shape at the given coordinates
+ */
+function drawShapeAtCoords(
+  ctx: CanvasRenderingContext2D,
+  shapeType: string,
+  x1: number, y1: number,
+  x2: number, y2: number,
+  filled: boolean
+): void {
+  const minX = Math.min(x1, x2);
+  const minY = Math.min(y1, y2);
+  const w = Math.abs(x2 - x1);
+  const h = Math.abs(y2 - y1);
+  const cx = (x1 + x2) / 2;
+  const cy = (y1 + y2) / 2;
+
+  ctx.beginPath();
+
+  switch (shapeType) {
+    case 'line':
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      break;
+
+    case 'rectangle':
+      if (filled) {
+        ctx.fillRect(minX, minY, w, h);
+      }
+      ctx.strokeRect(minX, minY, w, h);
+      break;
+
+    case 'circle':
+      const radius = Math.sqrt(w * w + h * h) / 2;
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      if (filled) ctx.fill();
+      ctx.stroke();
+      break;
+
+    case 'triangle':
+      ctx.moveTo(cx, minY); // Top
+      ctx.lineTo(minX, minY + h); // Bottom left
+      ctx.lineTo(minX + w, minY + h); // Bottom right
+      ctx.closePath();
+      if (filled) ctx.fill();
+      ctx.stroke();
+      break;
+
+    case 'star':
+      const outerR = Math.min(w, h) / 2;
+      const innerR = outerR * 0.4;
+      const points = 5;
+      for (let i = 0; i < points * 2; i++) {
+        const r = i % 2 === 0 ? outerR : innerR;
+        const angle = (Math.PI / points) * i - Math.PI / 2;
+        const px = cx + r * Math.cos(angle);
+        const py = cy + r * Math.sin(angle);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      if (filled) ctx.fill();
+      ctx.stroke();
+      break;
+  }
 }
 
 // === Brush Implementations ===
@@ -898,6 +1102,8 @@ function redraw(): void {
       if (!isOtherUser && item.id === selectedTextId) {
         drawTextSelection(item, rect);
       }
+    } else if (item.type === 'shape') {
+      drawShapeSaved(item as ShapeItem, rect);
     } else {
       // Default to stroke (handles old items without type field)
       drawStrokeSaved(item as Stroke, rect);
