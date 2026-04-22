@@ -1927,8 +1927,12 @@ function drawBuildModeUI(): void {
 function onKeyDown(e: KeyboardEvent): void {
   if (gameMode !== 'play') return;
 
-  // Don't process keys if in finish modal (typing name)
+  // Don't process keys if in finish modal (typing name) or if typing in an input
   if (showingFinishModal) return;
+
+  const activeEl = document.activeElement;
+  const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || (activeEl as HTMLElement).isContentEditable);
+  if (isTyping) return;
 
   keys[e.code] = true;
 

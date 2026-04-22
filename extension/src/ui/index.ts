@@ -148,24 +148,26 @@ const STYLES = `
     bottom: 18px;
     background: #111;
     color: #fff;
-    padding: 10px 14px;
-    border-radius: 12px;
+    padding: 10px;
+    border-radius: 10px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
     display: none;
-    gap: 10px;
+    gap: 6px;
     align-items: center;
     pointer-events: auto;
-    flex-wrap: wrap;
-    max-width: 500px;
     z-index: 2147483647;
+  }
+
+  .toolbar.game-mode {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .toolbar-drag-handle {
     cursor: grab;
-    padding: 4px 8px;
-    margin: -4px 0 -4px -8px;
+    padding: 2px 8px;
     color: #666;
-    font-size: 14px;
+    font-size: 12px;
     user-select: none;
   }
 
@@ -177,6 +179,11 @@ const STYLES = `
     cursor: grabbing;
   }
 
+  .toolbar.game-mode .toolbar-drag-handle {
+    align-self: center;
+    margin-bottom: -4px;
+  }
+
   .toolbar.show {
     display: flex;
   }
@@ -184,13 +191,14 @@ const STYLES = `
   .toolbar-section {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
   }
 
   .toolbar-divider {
     width: 1px;
-    height: 24px;
+    height: 20px;
     background: #333;
+    flex-shrink: 0;
   }
 
   .toolbar label {
@@ -201,13 +209,14 @@ const STYLES = `
   }
 
   .toolbar input[type="color"] {
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
     border: 2px solid #333;
     border-radius: 50%;
     cursor: pointer;
     padding: 0;
     background: none;
+    flex-shrink: 0;
   }
 
   .toolbar input[type="color"]::-webkit-color-swatch-wrapper {
@@ -240,13 +249,13 @@ const STYLES = `
   .quick-colors {
     display: flex;
     flex-wrap: wrap;
-    gap: 3px;
-    max-width: 140px;
+    gap: 2px;
+    max-width: 100px;
   }
 
   .quick-color {
-    width: 18px;
-    height: 18px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     border: 2px solid transparent;
     cursor: pointer;
@@ -268,6 +277,10 @@ const STYLES = `
 
   .quick-color[data-color="#000000"] {
     border-color: #333;
+  }
+
+  .toolbar.game-mode .quick-colors {
+    max-width: 80px;
   }
 
   .brush-styles {
@@ -365,11 +378,11 @@ const STYLES = `
   }
 
   .toolbar button.action-btn {
-    padding: 6px 12px;
+    padding: 5px 10px;
     border: none;
-    border-radius: 6px;
+    border-radius: 4px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     transition: background 0.1s;
   }
@@ -488,32 +501,60 @@ const STYLES = `
 
   .game-controls {
     display: none;
-    align-items: center;
-    gap: 10px;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .game-controls.active {
     display: flex;
   }
 
+  .game-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: center;
+  }
+
+  .game-actions {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+  }
+
+  .game-colors {
+    display: flex;
+    gap: 3px;
+  }
+
   .toolbar.game-mode .drawing-only {
     display: none !important;
+  }
+
+  .toolbar.game-mode > .toolbar-section,
+  .toolbar.game-mode > .toolbar-divider {
+    display: none !important;
+  }
+
+  .toolbar.game-mode > .toolbar-drag-handle,
+  .toolbar.game-mode > .game-controls {
+    display: flex !important;
   }
 
   .char-style-toggle {
     display: flex;
     background: #222;
-    border-radius: 8px;
+    border-radius: 4px;
     padding: 2px;
   }
 
   .char-style-btn {
-    padding: 6px 10px;
+    padding: 3px 6px;
     border: none;
     background: transparent;
-    border-radius: 6px;
+    border-radius: 3px;
     cursor: pointer;
-    font-size: 16px;
+    font-size: 14px;
     transition: background 0.1s;
   }
 
@@ -529,11 +570,12 @@ const STYLES = `
     background: #222;
     color: #fff;
     border: 1px solid #333;
-    border-radius: 6px;
-    padding: 4px 8px;
-    font-size: 12px;
+    border-radius: 4px;
+    padding: 3px 4px;
+    font-size: 14px;
     cursor: pointer;
-    min-width: 80px;
+    min-width: 36px;
+    text-align: center;
   }
 
   .char-customize-select:hover {
@@ -548,19 +590,18 @@ const STYLES = `
   .game-mode-toggle {
     display: flex;
     background: #222;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 2px;
   }
 
   .game-mode-btn {
-    padding: 5px 10px;
+    padding: 4px 8px;
     border: none;
     background: transparent;
     color: #888;
-    border-radius: 6px;
+    border-radius: 4px;
     cursor: pointer;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 14px;
     transition: background 0.1s, color 0.1s;
   }
 
@@ -573,23 +614,26 @@ const STYLES = `
     color: white;
   }
 
+  .build-tools-section {
+    display: flex;
+    align-items: center;
+  }
+
   .game-tools {
     display: flex;
-    gap: 3px;
-    flex-wrap: wrap;
-    max-width: 200px;
+    gap: 2px;
   }
 
   .game-tool-btn {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     padding: 0;
     border: none;
     background: #222;
     color: #aaa;
-    border-radius: 6px;
+    border-radius: 4px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 13px;
     transition: background 0.1s;
     display: flex;
     align-items: center;
@@ -1193,55 +1237,43 @@ export function initUI(): void {
 
     <!-- GAME MODE CONTROLS -->
     <div class="game-controls" id="game-controls">
-      <!-- Character Style Toggle -->
-      <div class="toolbar-section">
-        <div class="char-style-toggle">
-          <button class="char-style-btn active" id="oo-char-boy" title="Boy style">👦</button>
-          <button class="char-style-btn" id="oo-char-girl" title="Girl style">👧</button>
+      <!-- Row 1: Mode + Character -->
+      <div class="game-row">
+        <div class="game-mode-toggle">
+          <button class="game-mode-btn" data-mode="play" data-playmode="explore" title="Explore">🚶</button>
+          <button class="game-mode-btn" data-mode="play" data-playmode="race" title="Race">🏃</button>
+          <button class="game-mode-btn active" data-mode="build" title="Build">🔨</button>
         </div>
-      </div>
-
-      <!-- Character Customization -->
-      <div class="toolbar-section">
+        <div class="char-style-toggle">
+          <button class="char-style-btn active" id="oo-char-boy" title="Boy">👦</button>
+          <button class="char-style-btn" id="oo-char-girl" title="Girl">👧</button>
+        </div>
         <select class="char-customize-select" id="oo-hat-select" title="Hat">
-          <option value="none">No Hat</option>
-          <option value="cap">🧢 Cap</option>
-          <option value="tophat">🎩 Top Hat</option>
-          <option value="crown">👑 Crown</option>
-          <option value="beanie">🧶 Beanie</option>
-          <option value="party">🎉 Party</option>
+          <option value="none">🎩</option>
+          <option value="cap">🧢</option>
+          <option value="tophat">🎩</option>
+          <option value="crown">👑</option>
+          <option value="beanie">🧶</option>
+          <option value="party">🎉</option>
         </select>
         <select class="char-customize-select" id="oo-accessory-select" title="Face">
-          <option value="none">No Face</option>
-          <option value="glasses">👓 Glasses</option>
-          <option value="sunglasses">🕶️ Shades</option>
-          <option value="mustache">🥸 Stache</option>
-          <option value="beard">🧔 Beard</option>
-          <option value="mask">🦸 Mask</option>
+          <option value="none">😊</option>
+          <option value="glasses">👓</option>
+          <option value="sunglasses">🕶️</option>
+          <option value="mustache">🥸</option>
+          <option value="beard">🧔</option>
+          <option value="mask">🦸</option>
         </select>
       </div>
 
-      <div class="toolbar-divider"></div>
-
-      <!-- Play/Build Toggle -->
-      <div class="toolbar-section">
-        <div class="game-mode-toggle">
-          <button class="game-mode-btn" data-mode="play" data-playmode="explore" title="Explore freely - no timer, unlimited lives">🚶 Explore</button>
-          <button class="game-mode-btn" data-mode="play" data-playmode="race" title="Race mode - timer and 3 lives">🏃 Race</button>
-          <button class="game-mode-btn active" data-mode="build" title="Build the course">🔨 Build</button>
-        </div>
-      </div>
-
-      <div class="toolbar-divider"></div>
-
-      <!-- Build Tools (only shown in build mode) -->
-      <div class="toolbar-section build-tools-section">
+      <!-- Row 2: Build Tools -->
+      <div class="game-row build-tools-section">
         <div class="game-tools" id="game-tools">
           <button class="game-tool-btn" data-tool="select" title="Select">✋</button>
           <button class="game-tool-btn active" data-tool="spawn" title="Spawn">👤</button>
           <button class="game-tool-btn" data-tool="start" title="Start">🏁</button>
           <button class="game-tool-btn" data-tool="finish" title="Finish">🏆</button>
-          <button class="game-tool-btn" data-tool="checkpoint" title="Flag">🚩</button>
+          <button class="game-tool-btn" data-tool="checkpoint" title="Checkpoint">🚩</button>
           <button class="game-tool-btn" data-tool="trampoline" title="Bounce">🔶</button>
           <button class="game-tool-btn" data-tool="speedBoost" title="Speed">💨</button>
           <button class="game-tool-btn" data-tool="highJump" title="Jump">🦘</button>
@@ -1249,8 +1281,17 @@ export function initUI(): void {
         </div>
       </div>
 
-      <div class="toolbar-divider"></div>
-
+      <!-- Row 3: Colors + Actions -->
+      <div class="game-row">
+        <input type="color" id="oo-game-color" value="#ff3366" title="Color">
+        <div class="quick-colors game-colors" id="oo-game-quick-colors"></div>
+        <div class="game-actions">
+          <button class="action-btn btn-undo" id="oo-game-undo" title="Undo">↩</button>
+          <button class="action-btn btn-clear" id="oo-game-clear" title="Clear">🗑</button>
+          <button class="action-btn btn-cancel" id="oo-game-cancel">✕</button>
+          <button class="action-btn btn-save" id="oo-game-save">✓</button>
+        </div>
+      </div>
     </div>
 
     <!-- SHARED CONTROLS -->
@@ -1560,6 +1601,50 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   if (savedAccessory && accessorySelect) {
     accessorySelect.value = savedAccessory;
   }
+
+  // Game mode color picker
+  const gameColorInput = toolbar.querySelector('#oo-game-color') as HTMLInputElement;
+  gameColorInput?.addEventListener('input', () => {
+    document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color: gameColorInput.value } }));
+  });
+
+  // Populate game colors
+  const gameColorsContainer = toolbar.querySelector('#oo-game-quick-colors');
+  if (gameColorsContainer) {
+    const gameColors = ['#ff3366', '#22c55e', '#3b82f6', '#f59e0b', '#8b5cf6', '#fff', '#000'];
+    gameColorsContainer.innerHTML = gameColors.map((c, i) => `
+      <div class="quick-color ${i === 0 ? 'active' : ''}" data-color="${c}" style="background: ${c}" title="${c}"></div>
+    `).join('');
+
+    gameColorsContainer.querySelectorAll('.quick-color').forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        const color = (swatch as HTMLElement).dataset.color || '#ff3366';
+        if (gameColorInput) gameColorInput.value = color;
+        gameColorsContainer.querySelectorAll('.quick-color').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color } }));
+      });
+    });
+  }
+
+  // Game mode action buttons
+  toolbar.querySelector('#oo-game-undo')?.addEventListener('click', () => {
+    document.dispatchEvent(new CustomEvent('oo:undo'));
+  });
+
+  toolbar.querySelector('#oo-game-clear')?.addEventListener('click', () => {
+    document.dispatchEvent(new CustomEvent('oo:clear'));
+  });
+
+  toolbar.querySelector('#oo-game-cancel')?.addEventListener('click', () => {
+    setMode('none');
+    document.dispatchEvent(new CustomEvent('oo:cancel'));
+  });
+
+  toolbar.querySelector('#oo-game-save')?.addEventListener('click', () => {
+    setMode('none');
+    document.dispatchEvent(new CustomEvent('oo:save'));
+  });
 
   // Drag functionality
   const dragHandle = toolbar.querySelector('#oo-drag-handle');
