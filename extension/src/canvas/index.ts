@@ -75,6 +75,8 @@ type DrawItem = Stroke | TextItem | ShapeItem;
 let items: DrawItem[] = [];
 // Other users' items (read-only, rendered in background)
 let otherUsersItems: DrawItem[] = [];
+// Toggle to show/hide other users' drawings
+let showOthersDrawings = true;
 
 let currentStroke: { x: number; y: number }[] = [];
 let currentAnchor: { element: Element; selector: string; bounds: DOMRect } | null = null;
@@ -235,6 +237,19 @@ export function initCanvas(): void {
   document.addEventListener('oo:cancel', cancelDrawing);
   document.addEventListener('oo:undo', undoStroke);
   document.addEventListener('oo:clear', clearStrokes);
+
+  // Toggle for showing/hiding other users' drawings
+  document.addEventListener('oo:toggleothers', ((e: CustomEvent) => {
+    showOthersDrawings = e.detail.show;
+    redraw();
+    console.log('[OpenOverlay] Show others\' drawings:', showOthersDrawings);
+  }) as EventListener);
+
+  // Restore saved preference
+  const savedShowOthers = localStorage.getItem('oo_show_others');
+  if (savedShowOthers === 'false') {
+    showOthersDrawings = false;
+  }
 
   // Track game mode to avoid canvas undo/clear when in game
   document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
@@ -1238,8 +1253,9 @@ function redraw(): void {
   };
 
   // Combine all items for layer sorting
+  // Include other users' items only if toggle is on
   const allItems: { item: DrawItem; isOtherUser: boolean }[] = [
-    ...otherUsersItems.map(item => ({ item, isOtherUser: true })),
+    ...(showOthersDrawings ? otherUsersItems.map(item => ({ item, isOtherUser: true })) : []),
     ...items.map(item => ({ item, isOtherUser: false })),
   ];
 

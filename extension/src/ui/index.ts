@@ -24,6 +24,7 @@ let gameBuildTool: string = 'spawn';
 // Auth state
 let currentAuthUser: User | null = null;
 let isProfileModalOpen = false;
+let showOthersDrawings = true; // Toggle to show/hide other users' drawings
 
 // Quick color presets - expanded palette
 const QUICK_COLORS = [
@@ -726,6 +727,53 @@ const STYLES = `
     gap: 10px;
   }
 
+  .profile-settings {
+    padding: 12px 20px;
+    border-bottom: 1px solid #333;
+  }
+
+  .profile-setting-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+  }
+
+  .profile-setting-label {
+    color: #ccc;
+    font-size: 14px;
+  }
+
+  .toggle-switch {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    background: #333;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .toggle-switch.active {
+    background: #22c55e;
+  }
+
+  .toggle-switch::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+
+  .toggle-switch.active::after {
+    transform: translateX(20px);
+  }
+
   .profile-btn {
     flex: 1;
     padding: 10px 16px;
@@ -972,6 +1020,12 @@ export function initUI(): void {
       </div>
       <div class="profile-bio" id="profile-bio">
         <span class="profile-bio-empty">No bio yet</span>
+      </div>
+      <div class="profile-settings">
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Show others' drawings</span>
+          <div class="toggle-switch active" id="toggle-others-drawings" title="Show or hide drawings from other users"></div>
+        </div>
       </div>
       <div class="profile-actions">
         <button class="profile-btn danger" id="signout-btn">Sign Out</button>
@@ -1453,6 +1507,29 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       console.error('[OpenOverlay] Sign out failed:', error);
     }
   });
+
+  // Toggle for showing/hiding other users' drawings
+  const othersDrawingsToggle = shadowRoot.querySelector('#toggle-others-drawings');
+  othersDrawingsToggle?.addEventListener('click', () => {
+    showOthersDrawings = !showOthersDrawings;
+    othersDrawingsToggle.classList.toggle('active', showOthersDrawings);
+    // Dispatch event to canvas
+    document.dispatchEvent(new CustomEvent('oo:toggleothers', {
+      detail: { show: showOthersDrawings }
+    }));
+    // Save preference
+    localStorage.setItem('oo_show_others', showOthersDrawings ? 'true' : 'false');
+  });
+
+  // Restore saved preference
+  const savedShowOthers = localStorage.getItem('oo_show_others');
+  if (savedShowOthers === 'false') {
+    showOthersDrawings = false;
+    othersDrawingsToggle?.classList.remove('active');
+    document.dispatchEvent(new CustomEvent('oo:toggleothers', {
+      detail: { show: false }
+    }));
+  }
 
   // Listen for auth state changes
   onAuthStateChanged((user) => {
