@@ -217,20 +217,21 @@ const STYLES = `
   }
 
   .toolbar input[type="range"] {
-    width: 60px;
-    height: 4px;
+    width: 180px;
+    height: 6px;
     -webkit-appearance: none;
     background: #333;
-    border-radius: 2px;
+    border-radius: 3px;
   }
 
   .toolbar input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
+    width: 18px;
+    height: 18px;
     background: #fff;
     border-radius: 50%;
     cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
   }
 
   .quick-colors {

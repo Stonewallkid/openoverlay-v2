@@ -1048,22 +1048,54 @@ function drawRainbowStatic(ctx: CanvasRenderingContext2D, points: { x: number; y
 }
 
 function drawGlow(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[], color: string, width: number): void {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.shadowColor = color;
-  ctx.shadowBlur = width * 2;
+  // To avoid overlapping glow issues, we draw to an offscreen canvas first
+  // This prevents the glow from stacking when the stroke crosses itself
 
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i++) {
-    ctx.lineTo(points[i].x, points[i].y);
+  // Calculate bounds of the stroke with padding for glow
+  const padding = width * 3;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
   }
-  ctx.stroke();
 
-  // Draw again for stronger glow
-  ctx.stroke();
+  const offWidth = Math.ceil(maxX - minX + padding * 2);
+  const offHeight = Math.ceil(maxY - minY + padding * 2);
+
+  // Create offscreen canvas
+  const offCanvas = document.createElement('canvas');
+  offCanvas.width = offWidth;
+  offCanvas.height = offHeight;
+  const offCtx = offCanvas.getContext('2d');
+  if (!offCtx) return;
+
+  // Translate points to offscreen canvas space
+  const offsetX = minX - padding;
+  const offsetY = minY - padding;
+
+  // Draw glow layers (multiple passes for richer glow)
+  offCtx.strokeStyle = color;
+  offCtx.lineWidth = width;
+  offCtx.lineCap = 'round';
+  offCtx.lineJoin = 'round';
+  offCtx.shadowColor = color;
+  offCtx.shadowBlur = width * 2.5;
+
+  offCtx.beginPath();
+  offCtx.moveTo(points[0].x - offsetX, points[0].y - offsetY);
+  for (let i = 1; i < points.length; i++) {
+    offCtx.lineTo(points[i].x - offsetX, points[i].y - offsetY);
+  }
+  offCtx.stroke();
+
+  // Second pass for stronger center
+  offCtx.shadowBlur = width;
+  offCtx.stroke();
+
+  // Composite the offscreen canvas to main canvas
+  ctx.drawImage(offCanvas, offsetX, offsetY);
 }
 
 function redraw(): void {
