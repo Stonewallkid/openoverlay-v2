@@ -3,15 +3,18 @@
  * Handles freehand drawing with multiple brush styles
  */
 
-import { getColor, getSize, getOpacity, getBrush, getEraser, getBackground, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
+import { getColor, getSize, getOpacity, getBrush, getEraser, getLayer, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
 import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, isFirestoreAvailable, isLoggedIn } from '@/db';
 import { onAuthStateChanged } from '@/auth';
 
 let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
-// Separate canvas for collision detection (excludes background items)
+// Separate canvas for collision detection (only normal layer items)
 let collisionCanvas: HTMLCanvasElement | null = null;
 let collisionCtx: CanvasRenderingContext2D | null = null;
+// Background canvas renders BEHIND game character (lower z-index)
+let backgroundCanvas: HTMLCanvasElement | null = null;
+let backgroundCtx: CanvasRenderingContext2D | null = null;
 let isDrawing = false;
 let currentMode: 'none' | 'draw' | 'text' = 'none';
 let isGameMode = false;
@@ -27,7 +30,7 @@ interface Stroke {
   opacity: number;
   brush: string;
   eraser: boolean;
-  background?: boolean; // Background strokes don't collide with player
+  layer?: 'normal' | 'background' | 'foreground'; // Layer for render order & collision
 }
 
 // Text item with element-relative position
@@ -63,7 +66,7 @@ interface ShapeItem {
   width: number;
   opacity: number;
   filled: boolean;
-  background?: boolean; // Background shapes don't collide with player
+  layer?: 'normal' | 'background' | 'foreground'; // Layer for render order & collision
 }
 
 type DrawItem = Stroke | TextItem | ShapeItem;
@@ -185,6 +188,20 @@ export function initCanvas(): void {
   collisionCanvas = document.createElement('canvas');
   collisionCtx = collisionCanvas.getContext('2d');
 
+  // Create visible background canvas (BEHIND game character)
+  // Game canvas is at z-index 2147483638, so we use 2147483635
+  backgroundCanvas = document.createElement('canvas');
+  backgroundCanvas.id = 'oo-background-canvas';
+  backgroundCanvas.style.cssText = `
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2147483635;
+    pointer-events: none;
+  `;
+  document.body.appendChild(backgroundCanvas);
+  backgroundCtx = backgroundCanvas.getContext('2d');
+
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
@@ -283,6 +300,15 @@ function resizeCanvas(): void {
     collisionCanvas.width = docWidth * dpr;
     collisionCanvas.height = docHeight * dpr;
     collisionCtx.scale(dpr, dpr);
+  }
+
+  // Resize background canvas to match
+  if (backgroundCanvas && backgroundCtx) {
+    backgroundCanvas.style.width = `${docWidth}px`;
+    backgroundCanvas.style.height = `${docHeight}px`;
+    backgroundCanvas.width = docWidth * dpr;
+    backgroundCanvas.height = docHeight * dpr;
+    backgroundCtx.scale(dpr, dpr);
   }
 
   redraw();
@@ -646,7 +672,7 @@ function onPointerUp(): void {
       width: getSize(),
       opacity: getOpacity(),
       filled: shapeFilled,
-      background: getBackground(),
+      layer: getLayer(),
     });
 
     shapeStart = null;
@@ -685,7 +711,7 @@ function onPointerUp(): void {
       opacity: getOpacity(),
       brush: getBrush(),
       eraser: getEraser(),
-      background: getBackground(),
+      layer: getLayer(),
     });
   }
 
@@ -1126,11 +1152,16 @@ function redraw(): void {
     collisionCtx.clearRect(0, 0, collisionCanvas.width, collisionCanvas.height);
   }
 
+  // Clear background canvas
+  if (backgroundCanvas && backgroundCtx) {
+    backgroundCtx.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+  }
+
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
 
-  // Helper to render a single item
-  const renderItem = (item: DrawItem, isOtherUser: boolean = false) => {
+  // Helper to render a single item to a specific canvas context
+  const renderItemTo = (targetCtx: CanvasRenderingContext2D, item: DrawItem, isOtherUser: boolean = false) => {
     let el: Element | null = null;
 
     try {
@@ -1151,47 +1182,94 @@ function redraw(): void {
       height: domRect.height,
     };
 
-    // Check if this is a background item (no collision)
-    const isBackgroundItem = (item as any).background === true;
+    // Temporarily switch context for drawing functions
+    const saveCtx = ctx;
+    ctx = targetCtx;
 
     if (item.type === 'text') {
       drawTextSaved(item, rect);
-      // Draw selection handles if selected (only for own items)
-      if (!isOtherUser && item.id === selectedTextId) {
+      // Draw selection handles if selected (only for own items, only on main canvas)
+      if (!isOtherUser && item.id === selectedTextId && targetCtx === saveCtx) {
         drawTextSelection(item, rect);
       }
     } else if (item.type === 'shape') {
       drawShapeSaved(item as ShapeItem, rect);
-      // Also draw to collision canvas if not background
-      if (!isBackgroundItem && collisionCtx) {
-        const saveCtx = ctx;
-        ctx = collisionCtx;
-        drawShapeSaved(item as ShapeItem, rect);
-        ctx = saveCtx;
-      }
     } else {
       // Default to stroke (handles old items without type field)
       drawStrokeSaved(item as Stroke, rect);
-      // Also draw to collision canvas if not background
-      if (!isBackgroundItem && collisionCtx) {
-        const saveCtx = ctx;
-        ctx = collisionCtx;
-        drawStrokeSaved(item as Stroke, rect);
-        ctx = saveCtx;
-      }
     }
+
+    ctx = saveCtx;
   };
 
-  // Draw other users' items first (background layer)
-  for (const item of otherUsersItems) {
-    renderItem(item, true);
+  // Helper to render a single item to the collision canvas (only normal layer items)
+  const renderItemCollision = (item: DrawItem) => {
+    if (!collisionCtx) return;
+
+    let el: Element | null = null;
+    try {
+      el = document.querySelector(item.anchorSelector);
+    } catch {
+      return;
+    }
+
+    if (!el) return;
+
+    const domRect = el.getBoundingClientRect();
+    if (domRect.width === 0 || domRect.height === 0) return;
+
+    const rect = {
+      x: domRect.left + scrollX,
+      y: domRect.top + scrollY,
+      width: domRect.width,
+      height: domRect.height,
+    };
+
+    const saveCtx = ctx;
+    ctx = collisionCtx;
+
+    if (item.type === 'shape') {
+      drawShapeSaved(item as ShapeItem, rect);
+    } else if (item.type === 'stroke' || !item.type) {
+      drawStrokeSaved(item as Stroke, rect);
+    }
+
+    ctx = saveCtx;
+  };
+
+  // Combine all items for layer sorting
+  const allItems: { item: DrawItem; isOtherUser: boolean }[] = [
+    ...otherUsersItems.map(item => ({ item, isOtherUser: true })),
+    ...items.map(item => ({ item, isOtherUser: false })),
+  ];
+
+  // Separate items by layer
+  const backgroundItems = allItems.filter(({ item }) => (item as any).layer === 'background');
+  const normalItems = allItems.filter(({ item }) => {
+    const layer = (item as any).layer;
+    return !layer || layer === 'normal';
+  });
+  const foregroundItems = allItems.filter(({ item }) => (item as any).layer === 'foreground');
+
+  // Draw background items to the background canvas (behind game character)
+  if (backgroundCtx) {
+    for (const { item, isOtherUser } of backgroundItems) {
+      renderItemTo(backgroundCtx, item, isOtherUser);
+    }
   }
 
-  // Draw current user's items on top (editable)
-  for (const item of items) {
-    renderItem(item, false);
+  // Draw normal layer items to main canvas (character collides with these)
+  for (const { item, isOtherUser } of normalItems) {
+    renderItemTo(ctx!, item, isOtherUser);
+    renderItemCollision(item);
+  }
+
+  // Draw foreground items to main canvas (on top of everything including character)
+  for (const { item, isOtherUser } of foregroundItems) {
+    renderItemTo(ctx!, item, isOtherUser);
   }
 }
+
 
 function drawTextSelection(item: TextItem, rect: { x: number; y: number; width: number; height: number }): void {
   if (!ctx) return;

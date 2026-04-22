@@ -16,7 +16,7 @@ let currentTextStyle: string = 'normal';
 let currentShape: string = 'none'; // 'none' | 'rectangle' | 'circle' | 'line' | 'triangle' | 'star'
 let shapeFilled: boolean = false;
 let isEraser = false;
-let isBackground = false; // Background mode - no collision
+let drawLayer: 'normal' | 'background' | 'foreground' = 'normal';
 let pendingText: string = '';
 let gameSubMode: 'play' | 'build' = 'build';
 let gameBuildTool: string = 'spawn';
@@ -1007,7 +1007,8 @@ export function initUI(): void {
       <!-- Tools -->
       <div class="toolbar-section">
         <button class="tool-btn" id="oo-eraser" title="Eraser">🧹</button>
-        <button class="tool-btn" id="oo-background" title="Background (no collision)">🖼️</button>
+        <button class="tool-btn" id="oo-layer-bg" title="Background layer (behind character)">⬇️</button>
+        <button class="tool-btn" id="oo-layer-fg" title="Foreground layer (hides character - for secret passages)">⬆️</button>
       </div>
 
       <div class="toolbar-divider"></div>
@@ -1268,10 +1269,26 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     dispatchSettingsChange();
   });
 
-  // Background toggle (no collision mode)
-  toolbar.querySelector('#oo-background')?.addEventListener('click', () => {
-    isBackground = !isBackground;
-    toolbar.querySelector('#oo-background')?.classList.toggle('active', isBackground);
+  // Layer toggles (background/foreground - both no collision)
+  toolbar.querySelector('#oo-layer-bg')?.addEventListener('click', () => {
+    if (drawLayer === 'background') {
+      drawLayer = 'normal';
+    } else {
+      drawLayer = 'background';
+    }
+    toolbar.querySelector('#oo-layer-bg')?.classList.toggle('active', drawLayer === 'background');
+    toolbar.querySelector('#oo-layer-fg')?.classList.remove('active');
+    dispatchSettingsChange();
+  });
+
+  toolbar.querySelector('#oo-layer-fg')?.addEventListener('click', () => {
+    if (drawLayer === 'foreground') {
+      drawLayer = 'normal';
+    } else {
+      drawLayer = 'foreground';
+    }
+    toolbar.querySelector('#oo-layer-fg')?.classList.toggle('active', drawLayer === 'foreground');
+    toolbar.querySelector('#oo-layer-bg')?.classList.remove('active');
     dispatchSettingsChange();
   });
 
@@ -1516,7 +1533,7 @@ function dispatchSettingsChange(): void {
       brush: getBrush(),
       textStyle: getTextStyle(),
       eraser: isEraser,
-      background: isBackground,
+      layer: drawLayer,
     }
   }));
 }
@@ -1646,8 +1663,8 @@ export function getEraser(): boolean {
   return isEraser;
 }
 
-export function getBackground(): boolean {
-  return isBackground;
+export function getLayer(): 'normal' | 'background' | 'foreground' {
+  return drawLayer;
 }
 
 export function getTextStyle(): string {
