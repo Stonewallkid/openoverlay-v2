@@ -5,6 +5,7 @@
 
 import { signInWithGoogle, signOut, onAuthStateChanged, getCurrentUser } from '@/auth';
 import { getUserProfile, followUser, unfollowUser, isFollowing, type UserProfile } from '@/db';
+import { getBookmarks, type BookmarkedAnnotation } from '@/annotations';
 import type { User } from 'firebase/auth';
 
 let shadowHost: HTMLElement | null = null;
@@ -774,6 +775,63 @@ const STYLES = `
     transform: translateX(20px);
   }
 
+  .profile-bookmarks {
+    padding: 12px 20px;
+    border-bottom: 1px solid #333;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .profile-bookmarks-header {
+    color: #888;
+    font-size: 12px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .profile-bookmarks-count {
+    background: #333;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+  }
+
+  .bookmark-item {
+    background: #222;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .bookmark-item:hover {
+    background: #333;
+  }
+
+  .bookmark-quote {
+    color: #fff;
+    font-size: 13px;
+    margin-bottom: 4px;
+    font-style: italic;
+  }
+
+  .bookmark-meta {
+    color: #888;
+    font-size: 11px;
+  }
+
+  .no-bookmarks {
+    color: #666;
+    font-size: 13px;
+    font-style: italic;
+    text-align: center;
+    padding: 20px;
+  }
+
   .profile-btn {
     flex: 1;
     padding: 10px 16px;
@@ -1026,6 +1084,12 @@ export function initUI(): void {
           <span class="profile-setting-label">Show others' drawings</span>
           <div class="toggle-switch active" id="toggle-others-drawings" title="Show or hide drawings from other users"></div>
         </div>
+      </div>
+      <div class="profile-bookmarks" id="profile-bookmarks">
+        <div class="profile-bookmarks-header">
+          Bookmarks <span class="profile-bookmarks-count" id="bookmarks-count">0</span>
+        </div>
+        <div id="bookmarks-list"></div>
       </div>
       <div class="profile-actions">
         <button class="profile-btn danger" id="signout-btn">Sign Out</button>
@@ -1599,6 +1663,56 @@ function toggleProfileModal(): void {
   isProfileModalOpen = !isProfileModalOpen;
   const modal = shadowRoot?.querySelector('#oo-profile-modal');
   modal?.classList.toggle('show', isProfileModalOpen);
+
+  if (isProfileModalOpen) {
+    updateBookmarksList();
+  }
+}
+
+/**
+ * Update the bookmarks list in the profile modal
+ */
+function updateBookmarksList(): void {
+  const bookmarksList = shadowRoot?.querySelector('#bookmarks-list');
+  const bookmarksCount = shadowRoot?.querySelector('#bookmarks-count');
+
+  if (!bookmarksList) return;
+
+  const bookmarks = getBookmarks();
+  if (bookmarksCount) bookmarksCount.textContent = String(bookmarks.length);
+
+  if (bookmarks.length === 0) {
+    bookmarksList.innerHTML = '<div class="no-bookmarks">No bookmarks yet</div>';
+    return;
+  }
+
+  bookmarksList.innerHTML = bookmarks.slice(0, 10).map(b => `
+    <div class="bookmark-item" data-url="${escapeHtml(b.pageUrl)}">
+      <div class="bookmark-quote">"${escapeHtml(truncate(b.comment, 50))}"</div>
+      <div class="bookmark-meta">${escapeHtml(truncate(b.pageTitle, 30))} • ${escapeHtml(b.authorName)}</div>
+    </div>
+  `).join('');
+
+  // Add click handlers to navigate to bookmark
+  bookmarksList.querySelectorAll('.bookmark-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const url = (item as HTMLElement).dataset.url;
+      if (url) {
+        window.open(url, '_blank');
+      }
+    });
+  });
+}
+
+function escapeHtml(text: string): string {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + '...';
 }
 
 function dispatchSettingsChange(): void {

@@ -29,6 +29,9 @@ let activePopup: HTMLElement | null = null;
 let annotationHost: HTMLElement | null = null;
 let annotationRoot: ShadowRoot | null = null;
 
+// Bookmarked annotation IDs (across all pages)
+let bookmarkedIds: Set<string> = new Set();
+
 const HIGHLIGHT_COLORS = ['#ffeb3b', '#ff9800', '#4caf50', '#2196f3', '#e91e63'];
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🔥', '👀', '💯', '🎉'];
@@ -253,6 +256,24 @@ const STYLES = `
 
   .oo-popup .maximize-btn:hover {
     color: #fff;
+  }
+
+  .oo-popup .bookmark-btn {
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #888;
+    transition: color 0.15s;
+  }
+
+  .oo-popup .bookmark-btn:hover {
+    color: #fff;
+  }
+
+  .oo-popup .bookmark-btn.active {
+    color: #f59e0b;
   }
 
   .oo-popup .popup-reply-section {
@@ -609,6 +630,9 @@ export function initAnnotations(): void {
   // Load saved annotations
   loadAnnotations();
 
+  // Load bookmarked annotation IDs
+  loadBookmarkIds();
+
   // Apply highlights to page
   applyHighlights();
 
@@ -955,6 +979,7 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
           💬 ${replyCount > 0 ? replyCount : ''}
         </button>
         <button class="add-reaction" id="popup-add-reaction" title="React">+</button>
+        <button class="bookmark-btn ${bookmarkedIds.has(annotation.id) ? 'active' : ''}" id="popup-bookmark-btn" title="Bookmark">🔖</button>
         <button class="maximize-btn" title="Open in sidebar">⛶</button>
       </div>
     </div>
@@ -993,6 +1018,14 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
     isPopupPinned = false;
     hideInteractivePopup();
     openCommentPanel(annotation);
+  });
+
+  // Bookmark button - toggle bookmark
+  popup.querySelector('#popup-bookmark-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleBookmark(annotation.id);
+    const btn = popup.querySelector('#popup-bookmark-btn');
+    btn?.classList.toggle('active', bookmarkedIds.has(annotation.id));
   });
 
   // Comment button - toggle reply section
@@ -1573,6 +1606,73 @@ function loadAnnotations(): void {
     }
   }
 }
+
+// ============ BOOKMARKS ============
+
+interface BookmarkedAnnotation {
+  id: string;
+  pageUrl: string;
+  pageTitle: string;
+  text: string;
+  comment: string;
+  authorName: string;
+  bookmarkedAt: number;
+}
+
+function toggleBookmark(annotationId: string): void {
+  if (bookmarkedIds.has(annotationId)) {
+    bookmarkedIds.delete(annotationId);
+    removeBookmark(annotationId);
+    console.log('[OpenOverlay] Removed bookmark');
+  } else {
+    bookmarkedIds.add(annotationId);
+    const annotation = annotations.find(a => a.id === annotationId);
+    if (annotation) {
+      addBookmark(annotation);
+      console.log('[OpenOverlay] Added bookmark');
+    }
+  }
+}
+
+function addBookmark(annotation: Annotation): void {
+  const bookmarks = getBookmarks();
+
+  // Don't duplicate
+  if (bookmarks.some(b => b.id === annotation.id)) return;
+
+  bookmarks.push({
+    id: annotation.id,
+    pageUrl: window.location.href,
+    pageTitle: document.title,
+    text: annotation.text,
+    comment: annotation.comment,
+    authorName: annotation.authorName,
+    bookmarkedAt: Date.now(),
+  });
+
+  localStorage.setItem('oo_bookmarks', JSON.stringify(bookmarks));
+}
+
+function removeBookmark(annotationId: string): void {
+  const bookmarks = getBookmarks().filter(b => b.id !== annotationId);
+  localStorage.setItem('oo_bookmarks', JSON.stringify(bookmarks));
+}
+
+function getBookmarks(): BookmarkedAnnotation[] {
+  try {
+    return JSON.parse(localStorage.getItem('oo_bookmarks') || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function loadBookmarkIds(): void {
+  const bookmarks = getBookmarks();
+  bookmarkedIds = new Set(bookmarks.map(b => b.id));
+}
+
+// Export for UI
+export { getBookmarks, type BookmarkedAnnotation };
 
 function getPageKey(): string {
   return btoa(window.location.href).slice(0, 32);
