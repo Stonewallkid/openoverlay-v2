@@ -20,23 +20,27 @@ if ((window as any).__OPENOVERLAY_V2__) {
 
   // Simple init - show FAB and canvas
   function init(): void {
-    try {
-      console.log('[OpenOverlay] init() called');
-      console.log('[OpenOverlay] document.body exists:', !!document.body);
+    console.log('[OpenOverlay] init() called');
+    console.log('[OpenOverlay] document.body exists:', !!document.body);
 
-      // Initialize Firebase (auth + database)
+    // Initialize Firebase (auth + database) - optional, don't block on failure
+    try {
       initFirestore();
       initAuth();
+    } catch (err) {
+      console.warn('[OpenOverlay] Firebase init failed (may be incognito):', err);
+      // Continue without Firebase - drawing still works
+    }
 
-      // Initialize UI components
+    // Initialize UI components - these are required
+    try {
       initUI();
       initCanvas();
       initAnnotations();
       initGame();
-
       console.log('[OpenOverlay] Ready!');
     } catch (err) {
-      console.error('[OpenOverlay] Init error:', err);
+      console.error('[OpenOverlay] UI init error:', err);
     }
   }
 

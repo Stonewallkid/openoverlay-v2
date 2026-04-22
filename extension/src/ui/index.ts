@@ -408,6 +408,35 @@ const STYLES = `
     display: flex;
   }
 
+  .toolbar.game-mode .drawing-only {
+    display: none !important;
+  }
+
+  .char-style-toggle {
+    display: flex;
+    background: #222;
+    border-radius: 8px;
+    padding: 2px;
+  }
+
+  .char-style-btn {
+    padding: 6px 10px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: background 0.1s;
+  }
+
+  .char-style-btn:hover {
+    background: #333;
+  }
+
+  .char-style-btn.active {
+    background: #22c55e;
+  }
+
   .game-mode-toggle {
     display: flex;
     background: #222;
@@ -416,13 +445,13 @@ const STYLES = `
   }
 
   .game-mode-btn {
-    padding: 6px 14px;
+    padding: 5px 10px;
     border: none;
     background: transparent;
     color: #888;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     transition: background 0.1s, color 0.1s;
   }
@@ -437,22 +466,26 @@ const STYLES = `
   }
 
   .game-tools {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 4px;
-    max-width: 320px;
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+    max-width: 200px;
   }
 
   .game-tool-btn {
-    padding: 4px 6px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
     border: none;
     background: #222;
     color: #aaa;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 14px;
     transition: background 0.1s;
-    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .game-tool-btn:hover {
@@ -862,6 +895,16 @@ export function initUI(): void {
 
     <!-- GAME MODE CONTROLS -->
     <div class="game-controls" id="game-controls">
+      <!-- Character Style Toggle -->
+      <div class="toolbar-section">
+        <div class="char-style-toggle">
+          <button class="char-style-btn active" id="oo-char-boy" title="Boy style">👦</button>
+          <button class="char-style-btn" id="oo-char-girl" title="Girl style">👧</button>
+        </div>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
       <!-- Play/Build Toggle -->
       <div class="toolbar-section">
         <div class="game-mode-toggle">
@@ -876,15 +919,15 @@ export function initUI(): void {
       <!-- Build Tools (only shown in build mode) -->
       <div class="toolbar-section build-tools-section">
         <div class="game-tools" id="game-tools">
-          <button class="game-tool-btn" data-tool="select" title="Select - drag to move, shift+click to delete">✋ Select</button>
-          <button class="game-tool-btn active" data-tool="spawn" title="Place spawn point">👤 Spawn</button>
-          <button class="game-tool-btn" data-tool="start" title="Place start flag">🏁 Start</button>
-          <button class="game-tool-btn" data-tool="finish" title="Place finish flag">🏆 Finish</button>
-          <button class="game-tool-btn" data-tool="checkpoint" title="Place checkpoint flag">🚩 Flag</button>
-          <button class="game-tool-btn" data-tool="trampoline" title="Bouncy pad">🔶 Bounce</button>
-          <button class="game-tool-btn" data-tool="speedBoost" title="Speed boost (3 sec)">💨 Speed</button>
-          <button class="game-tool-btn" data-tool="highJump" title="Next jump is higher">🦘 Jump</button>
-          <button class="game-tool-btn" data-tool="spike" title="Deadly spikes">🔺 Spike</button>
+          <button class="game-tool-btn" data-tool="select" title="Select">✋</button>
+          <button class="game-tool-btn active" data-tool="spawn" title="Spawn">👤</button>
+          <button class="game-tool-btn" data-tool="start" title="Start">🏁</button>
+          <button class="game-tool-btn" data-tool="finish" title="Finish">🏆</button>
+          <button class="game-tool-btn" data-tool="checkpoint" title="Flag">🚩</button>
+          <button class="game-tool-btn" data-tool="trampoline" title="Bounce">🔶</button>
+          <button class="game-tool-btn" data-tool="speedBoost" title="Speed">💨</button>
+          <button class="game-tool-btn" data-tool="highJump" title="Jump">🦘</button>
+          <button class="game-tool-btn" data-tool="spike" title="Spike">🔺</button>
         </div>
       </div>
 
@@ -908,23 +951,23 @@ export function initUI(): void {
 
     <div class="toolbar-divider"></div>
 
-    <!-- Size -->
-    <div class="toolbar-section">
+    <!-- Size (hidden in game mode) -->
+    <div class="toolbar-section drawing-only" id="oo-size-section">
       <label>Size</label>
-      <input type="range" id="oo-size" min="1" max="200" value="24">
+      <input type="range" id="oo-size" min="1" max="150" value="24">
       <span class="size-display" id="oo-size-display">24</span>
     </div>
 
-    <div class="toolbar-divider"></div>
+    <div class="toolbar-divider drawing-only"></div>
 
-    <!-- Opacity -->
-    <div class="toolbar-section">
+    <!-- Opacity (hidden in game mode) -->
+    <div class="toolbar-section drawing-only" id="oo-opacity-section">
       <label>Opacity</label>
       <input type="range" id="oo-opacity" min="10" max="100" value="100">
       <span class="opacity-display" id="oo-opacity-display">100%</span>
     </div>
 
-    <div class="toolbar-divider"></div>
+    <div class="toolbar-divider drawing-only"></div>
 
     <!-- Actions -->
     <div class="toolbar-section">
@@ -1091,13 +1134,13 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     });
   });
 
-  // Game build tools
-  toolbar.querySelectorAll('.game-tool-btn').forEach(btn => {
+  // Game build tools (only ones with data-tool attribute)
+  toolbar.querySelectorAll('.game-tool-btn[data-tool]').forEach(btn => {
     btn.addEventListener('click', () => {
       const tool = (btn as HTMLElement).dataset.tool || 'platform';
       gameBuildTool = tool;
 
-      toolbar.querySelectorAll('.game-tool-btn').forEach(b => b.classList.remove('active'));
+      toolbar.querySelectorAll('.game-tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
       // Dispatch tool change
@@ -1106,6 +1149,30 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       }));
     });
   });
+
+  // Character style toggle (boy/girl)
+  const boyBtn = toolbar.querySelector('#oo-char-boy');
+  const girlBtn = toolbar.querySelector('#oo-char-girl');
+
+  boyBtn?.addEventListener('click', () => {
+    boyBtn.classList.add('active');
+    girlBtn?.classList.remove('active');
+    document.dispatchEvent(new CustomEvent('oo:playerstyle', { detail: { isGirl: false } }));
+    localStorage.setItem('oo_player_girl', 'false');
+  });
+
+  girlBtn?.addEventListener('click', () => {
+    girlBtn.classList.add('active');
+    boyBtn?.classList.remove('active');
+    document.dispatchEvent(new CustomEvent('oo:playerstyle', { detail: { isGirl: true } }));
+    localStorage.setItem('oo_player_girl', 'true');
+  });
+
+  // Restore character style from localStorage
+  if (localStorage.getItem('oo_player_girl') === 'true') {
+    boyBtn?.classList.remove('active');
+    girlBtn?.classList.add('active');
+  }
 
   // Drag functionality
   const dragHandle = toolbar.querySelector('#oo-drag-handle');
@@ -1300,6 +1367,7 @@ function setMode(mode: 'none' | 'draw' | 'text' | 'game'): void {
   // Show/hide toolbar
   const toolbar = shadowRoot?.querySelector('.toolbar');
   toolbar?.classList.toggle('show', mode !== 'none');
+  toolbar?.classList.toggle('game-mode', mode === 'game');
 
   // Toggle draw/text/game controls
   const drawControls = shadowRoot?.querySelector('#draw-controls');
@@ -1315,7 +1383,7 @@ function setMode(mode: 'none' | 'draw' | 'text' | 'game'): void {
   if (sizeInput && sizeDisplay) {
     if (mode === 'text') {
       sizeInput.value = '32';
-      sizeInput.max = '300';
+      sizeInput.max = '200';
       sizeDisplay.textContent = '32';
     } else if (mode === 'draw') {
       sizeInput.value = '4';

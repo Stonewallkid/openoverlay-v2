@@ -3,7 +3,7 @@
  * Platformer game with stick figure character and course building
  */
 
-import { getCollisionSurfaces } from '@/canvas';
+import { checkPixelCollision } from '@/canvas';
 
 // Game state
 let gameCanvas: HTMLCanvasElement | null = null;
@@ -56,6 +56,17 @@ const WAVE_DURATION = 2000; // Wave for 2 seconds
 
 // Player color
 let playerColor = localStorage.getItem('oo_player_color') || '#ffffff';
+
+// Girl mode (longer hair + dress)
+let isGirlMode = localStorage.getItem('oo_player_girl') === 'true';
+
+// Blood splat effects
+interface BloodSplat {
+  x: number;
+  y: number;
+  createdAt: number;
+}
+let bloodSplats: BloodSplat[] = [];
 
 // Course elements
 interface Checkpoint {
@@ -132,8 +143,12 @@ let notification: { text: string; subtext?: string; endTime: number } | null = n
 // Player frozen during countdown
 let playerFrozen = false;
 
-// Restart button
+// Restart button (legacy - replaced by popup)
 let restartButton: HTMLButtonElement | null = null;
+
+// Game popup
+let gamePopup: HTMLDivElement | null = null;
+let popupType: 'none' | 'gameover' | 'finish' = 'none';
 
 // Scoreboard
 interface ScoreEntry {
@@ -205,6 +220,12 @@ export function initGame(): void {
     playerColor = e.detail.color;
     localStorage.setItem('oo_player_color', playerColor);
     render(); // Re-render to show new color
+  }) as EventListener);
+
+  // Listen for player style changes (girl mode)
+  document.addEventListener('oo:playerstyle', ((e: CustomEvent) => {
+    isGirlMode = e.detail.isGirl;
+    render();
   }) as EventListener);
 
   // Mouse events for building
@@ -433,6 +454,162 @@ function removeRestartButton(): void {
   }
 }
 
+function showGamePopup(type: 'gameover' | 'finish'): void {
+  if (gamePopup) removeGamePopup();
+
+  popupType = type;
+  const { top10 } = getTopScores();
+
+  gamePopup = document.createElement('div');
+  gamePopup.id = 'oo-game-popup';
+  gamePopup.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0,0,0,0.7);
+    z-index: 2147483647;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, -apple-system, sans-serif;
+  `;
+
+  const isFinish = type === 'finish';
+  const title = isFinish ? '🏆 RACE COMPLETE!' : '💀 GAME OVER';
+  const titleColor = isFinish ? '#22c55e' : '#ef4444';
+  const timeStr = (raceTime / 1000).toFixed(2);
+  const isBest = isFinish && finishTime === currentCourse.bestTime;
+
+  let leaderboardHTML = '';
+  if (top10.length > 0) {
+    leaderboardHTML = `
+      <div style="margin-top: 15px; max-height: 200px; overflow-y: auto;">
+        <div style="color: #fbbf24; font-weight: bold; margin-bottom: 8px;">🏆 Today's Best</div>
+        ${top10.slice(0, 5).map((s, i) => `
+          <div style="display: flex; justify-content: space-between; color: ${i < 3 ? ['#fbbf24', '#c0c0c0', '#cd7f32'][i] : '#888'}; font-size: 13px; padding: 2px 0;">
+            <span>${i + 1}. ${s.name.slice(0, 10)}</span>
+            <span>${(s.time / 1000).toFixed(2)}s</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    background: #111;
+    border: 3px solid ${titleColor};
+    border-radius: 12px;
+    padding: 25px 35px;
+    text-align: center;
+    min-width: 300px;
+    max-width: 400px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+  `;
+  modal.innerHTML = `
+    <div style="color: ${titleColor}; font-size: 24px; font-weight: bold; margin-bottom: 15px;">${title}</div>
+    <div style="color: #fff; font-size: 40px; font-weight: bold; font-family: monospace;">${timeStr}s</div>
+    ${isBest ? '<div style="color: #fbbf24; font-size: 14px; margin-top: 5px;">⭐ NEW PERSONAL BEST!</div>' : ''}
+    ${isFinish ? `
+      <div style="margin-top: 15px;">
+        <input type="text" id="oo-popup-name" placeholder="Enter name..." value="${playerName}"
+          style="padding: 8px 12px; border-radius: 6px; border: 2px solid #333; background: #222; color: #fff; font-size: 14px; width: 180px; text-align: center;">
+      </div>
+    ` : ''}
+    ${leaderboardHTML}
+    <div style="display: flex; gap: 10px; justify-content: center; margin-top: 20px;">
+      <button id="oo-popup-retry" style="padding: 10px 25px; background: ${titleColor}; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: bold; cursor: pointer;">
+        🔄 Retry
+      </button>
+      <button id="oo-popup-close" style="padding: 10px 25px; background: #333; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: bold; cursor: pointer;">
+        ✕ Close
+      </button>
+    </div>
+  `;
+
+  gamePopup.appendChild(modal);
+  document.body.appendChild(gamePopup);
+
+  // Event listeners
+  const retryBtn = gamePopup.querySelector('#oo-popup-retry');
+  const closeBtn = gamePopup.querySelector('#oo-popup-close');
+  const nameInput = gamePopup.querySelector('#oo-popup-name') as HTMLInputElement | null;
+
+  retryBtn?.addEventListener('click', () => {
+    // Save score if finishing with name
+    if (isFinish && nameInput && nameInput.value.trim()) {
+      saveScore(nameInput.value.trim(), finishTime);
+    }
+    removeGamePopup();
+    restartRace();
+  });
+
+  closeBtn?.addEventListener('click', () => {
+    // Save score if finishing with name
+    if (isFinish && nameInput && nameInput.value.trim()) {
+      saveScore(nameInput.value.trim(), finishTime);
+    }
+    removeGamePopup();
+    exitGame();
+  });
+
+  // Click outside modal to close
+  gamePopup.addEventListener('click', (e) => {
+    if (e.target === gamePopup) {
+      if (isFinish && nameInput && nameInput.value.trim()) {
+        saveScore(nameInput.value.trim(), finishTime);
+      }
+      removeGamePopup();
+      exitGame();
+    }
+  });
+
+  // Focus name input if present
+  nameInput?.focus();
+
+  // Enter key submits
+  nameInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && nameInput.value.trim()) {
+      saveScore(nameInput.value.trim(), finishTime);
+      removeGamePopup();
+      restartRace();
+    }
+  });
+}
+
+function removeGamePopup(): void {
+  if (gamePopup) {
+    gamePopup.remove();
+    gamePopup = null;
+  }
+  popupType = 'none';
+}
+
+function restartRace(): void {
+  raceStarted = false;
+  raceTime = 0;
+  checkpointCount = 0;
+  currentCourse.checkpoints.forEach(c => c.reached = false);
+  lives = maxLives;
+  isDead = false;
+  showingFinishModal = false;
+  showLeaderboard = false;
+  bloodSplats = [];
+  removeRestartButton();
+  startCountdown();
+}
+
+function exitGame(): void {
+  // Exit to game menu (build mode)
+  document.dispatchEvent(new CustomEvent('oo:gamemode', { detail: { mode: 'build' } }));
+  raceStarted = false;
+  showingFinishModal = false;
+  showLeaderboard = false;
+  removeRestartButton();
+}
+
 function handleDeath(): void {
   if (isDead) return; // Already dead
 
@@ -471,7 +648,7 @@ function update(dt: number): void {
       if (playMode === 'race') {
         raceStarted = true;
         raceStartTime = performance.now();
-        createRestartButton();
+        // Popup will handle retry, no need for floating button
       }
     }
     return; // Don't update player during countdown
@@ -491,9 +668,11 @@ function update(dt: number): void {
     if (performance.now() - deathTime >= RESPAWN_DELAY) {
       // Check if game over (race mode only)
       if (playMode === 'race' && lives <= 0) {
-        // Game over - stop race
+        // Game over - show popup
         raceStarted = false;
-        notification = { text: 'GAME OVER', subtext: 'Press Restart to try again', endTime: performance.now() + 5000 };
+        isDead = false;
+        removeRestartButton();
+        showGamePopup('gameover');
         return;
       }
       // Respawn
@@ -576,81 +755,31 @@ function update(dt: number): void {
   player.x += player.vx * dt;
   player.y += player.vy * dt;
 
-  // Get collision surfaces
-  const surfaces = getCollisionSurfaces();
+  // --- PIXEL-PERFECT COLLISION DETECTION ---
 
-  // --- COLLISION DETECTION ---
+  // Check collision at player position
+  const collision = checkPixelCollision(
+    player.x,
+    player.y,
+    player.width,
+    player.height
+  );
 
-  // Pass 1: Ceiling collision (when jumping up)
-  if (player.vy < 0) {
-    for (const surface of surfaces) {
-      const playerLeft = player.x;
-      const playerRight = player.x + player.width;
-      const playerTop = player.y;
-      const playerCenterX = player.x + player.width / 2;
-
-      const surfLeft = surface.x;
-      const surfRight = surface.x + surface.width;
-      const surfBottom = surface.y + surface.height;
-
-      // Check if player's center is horizontally under the surface
-      if (playerCenterX < surfLeft || playerCenterX > surfRight) {
-        continue;
-      }
-
-      // Check if player's head is hitting the bottom of the surface
-      const headToSurface = surfBottom - playerTop;
-      if (headToSurface >= 0 && headToSurface < 15) {
-        // Bump head - stop upward movement
-        player.y = surfBottom;
-        player.vy = 1; // Start falling
-        break;
-      }
-    }
+  // Ceiling collision (when jumping up)
+  if (player.vy < 0 && collision.ceiling) {
+    player.y = collision.ceilingY;
+    player.vy = 1; // Start falling
   }
 
-  // Pass 2: Floor collision (when falling down)
+  // Floor collision (when falling down)
   player.onGround = false;
-  let bestFloorY = Infinity;
 
-  for (const surface of surfaces) {
-    const playerLeft = player.x;
-    const playerRight = player.x + player.width;
-    const playerBottom = player.y + player.height;
-    const playerCenterX = player.x + player.width / 2;
-
-    const surfLeft = surface.x;
-    const surfRight = surface.x + surface.width;
-    const surfTop = surface.y;
-    const surfBottom = surface.y + surface.height;
-    const surfCenterY = surface.y + surface.height / 2;
-
-    // Check horizontal overlap - use some tolerance
-    const horizontalOverlap = Math.min(playerRight, surfRight) - Math.max(playerLeft, surfLeft);
-    if (horizontalOverlap < 5) continue;
-
-    // Only land when falling down (one-way platform)
-    if (player.vy < 0) continue;
-
-    // Player's feet must be near the surface top
-    // Allow landing if feet are within range of surface top
-    const feetToSurfTop = playerBottom - surfTop;
-    if (feetToSurfTop < -5) continue;  // Feet too high above surface
-    if (feetToSurfTop > 30) continue;  // Feet too far below surface
-
-    // This is a valid floor - track the highest one
-    if (surfTop < bestFloorY) {
-      bestFloorY = surfTop;
-    }
-  }
-
-  // Land on the best floor found
-  if (bestFloorY < Infinity) {
+  if (player.vy >= 0 && collision.floor) {
     // Check if just landed (wasn't on ground before)
     if (!wasOnGround && Math.abs(player.vx) > 0.5) {
       landingSlideFrames = 8; // Slide for 8 frames
     }
-    player.y = bestFloorY - player.height;
+    player.y = collision.floorY - player.height;
     player.vy = 0;
     player.onGround = true;
     player.jumpsRemaining = player.maxJumps;
@@ -741,14 +870,9 @@ function checkCheckpoints(): void {
             saveCourse();
           }
 
-          // Remove restart button on finish
+          // Remove restart button and show finish popup
           removeRestartButton();
-
-          // Show finish modal for name entry
-          showingFinishModal = true;
-          if (gameCanvas) {
-            gameCanvas.style.pointerEvents = 'auto';
-          }
+          showGamePopup('finish');
 
           // Dispatch finish event
           document.dispatchEvent(new CustomEvent('oo:racefinish', {
@@ -804,6 +928,12 @@ function checkGameElements(): void {
         case 'spike':
           // Spikes kill the player
           if (!isDead) {
+            // Add blood splat at player position
+            bloodSplats.push({
+              x: player.x + player.width / 2,
+              y: player.y + player.height,
+              createdAt: performance.now()
+            });
             handleDeath();
           }
           break;
@@ -817,6 +947,9 @@ function render(): void {
 
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
 
+  // Draw blood splats (behind everything)
+  drawBloodSplats();
+
   // Draw checkpoints and game elements
   for (const checkpoint of currentCourse.checkpoints) {
     drawCheckpoint(checkpoint);
@@ -826,13 +959,50 @@ function render(): void {
   if (gameMode === 'play') {
     drawPlayer();
     drawHUD();
-    drawLeaderboard();
-    drawFinishModal();
+    // Note: Leaderboard and finish modal replaced by game popup
   }
 
   // Draw build mode indicator
   if (gameMode === 'build') {
     drawBuildModeUI();
+  }
+}
+
+function drawBloodSplats(): void {
+  if (!gameCtx) return;
+
+  const now = performance.now();
+  const SPLAT_DURATION = 5000; // Fade after 5 seconds
+
+  // Filter out old splats
+  bloodSplats = bloodSplats.filter(s => now - s.createdAt < SPLAT_DURATION);
+
+  for (const splat of bloodSplats) {
+    const age = now - splat.createdAt;
+    const alpha = Math.max(0, 1 - age / SPLAT_DURATION);
+
+    gameCtx.save();
+    gameCtx.globalAlpha = alpha;
+
+    // Main splat
+    gameCtx.fillStyle = '#dc2626';
+    gameCtx.beginPath();
+    gameCtx.arc(splat.x, splat.y, 12, 0, Math.PI * 2);
+    gameCtx.fill();
+
+    // Smaller droplets around
+    gameCtx.fillStyle = '#b91c1c';
+    for (let i = 0; i < 5; i++) {
+      const angle = (i / 5) * Math.PI * 2 + Math.random() * 0.5;
+      const dist = 15 + Math.random() * 10;
+      const dx = Math.cos(angle) * dist;
+      const dy = Math.sin(angle) * dist * 0.5; // Flatter spread
+      gameCtx.beginPath();
+      gameCtx.arc(splat.x + dx, splat.y + dy, 4 + Math.random() * 3, 0, Math.PI * 2);
+      gameCtx.fill();
+    }
+
+    gameCtx.restore();
   }
 }
 
@@ -845,71 +1015,101 @@ function drawCheckpoint(checkpoint: Checkpoint): void {
   gameCtx.save();
 
   if (checkpoint.type === 'start') {
-    // Green flag
-    const flagColor = checkpoint.reached ? '#86efac' : '#22c55e';
+    // Race start arch
+    const archColor = checkpoint.reached ? '#86efac' : '#22c55e';
+    const archWidth = 80;
+    const archHeight = 70;
 
-    // Pole
+    // Left pole
     gameCtx.strokeStyle = '#444';
-    gameCtx.lineWidth = 4;
+    gameCtx.lineWidth = 6;
     gameCtx.beginPath();
-    gameCtx.moveTo(x, y);
-    gameCtx.lineTo(x, y - 50);
+    gameCtx.moveTo(x - archWidth/2, y);
+    gameCtx.lineTo(x - archWidth/2, y - archHeight);
     gameCtx.stroke();
 
-    // Flag
-    gameCtx.fillStyle = flagColor;
+    // Right pole
     gameCtx.beginPath();
-    gameCtx.moveTo(x, y - 50);
-    gameCtx.lineTo(x + 35, y - 40);
-    gameCtx.lineTo(x, y - 30);
-    gameCtx.closePath();
-    gameCtx.fill();
+    gameCtx.moveTo(x + archWidth/2, y);
+    gameCtx.lineTo(x + archWidth/2, y - archHeight);
+    gameCtx.stroke();
 
-    // Label
+    // Arch top (banner)
+    gameCtx.fillStyle = archColor;
+    gameCtx.fillRect(x - archWidth/2 - 3, y - archHeight - 15, archWidth + 6, 20);
+
+    // Border on banner
+    gameCtx.strokeStyle = '#166534';
+    gameCtx.lineWidth = 2;
+    gameCtx.strokeRect(x - archWidth/2 - 3, y - archHeight - 15, archWidth + 6, 20);
+
+    // START text on banner
     gameCtx.fillStyle = '#fff';
-    gameCtx.font = 'bold 11px sans-serif';
+    gameCtx.font = 'bold 14px sans-serif';
     gameCtx.textAlign = 'center';
-    gameCtx.fillText('START', x, y + 15);
+    gameCtx.fillText('START', x, y - archHeight - 1);
 
   } else if (checkpoint.type === 'finish') {
-    // Checkered flag
-    const flagColor = checkpoint.reached ? '#fbbf24' : '#ef4444';
+    // Checkered finish arch
+    const archWidth = 80;
+    const archHeight = 70;
 
-    // Pole
+    // Left pole
     gameCtx.strokeStyle = '#444';
-    gameCtx.lineWidth = 4;
+    gameCtx.lineWidth = 6;
     gameCtx.beginPath();
-    gameCtx.moveTo(x, y);
-    gameCtx.lineTo(x, y - 50);
+    gameCtx.moveTo(x - archWidth/2, y);
+    gameCtx.lineTo(x - archWidth/2, y - archHeight);
     gameCtx.stroke();
 
-    // Flag
-    gameCtx.fillStyle = flagColor;
+    // Right pole
     gameCtx.beginPath();
-    gameCtx.moveTo(x, y - 50);
-    gameCtx.lineTo(x + 35, y - 40);
-    gameCtx.lineTo(x, y - 30);
-    gameCtx.closePath();
-    gameCtx.fill();
+    gameCtx.moveTo(x + archWidth/2, y);
+    gameCtx.lineTo(x + archWidth/2, y - archHeight);
+    gameCtx.stroke();
+
+    // Checkered banner
+    const bannerY = y - archHeight - 15;
+    const bannerH = 20;
+    const squareSize = 8;
+
+    // Background
+    gameCtx.fillStyle = checkpoint.reached ? '#fbbf24' : '#111';
+    gameCtx.fillRect(x - archWidth/2 - 3, bannerY, archWidth + 6, bannerH);
 
     // Checkered pattern
-    gameCtx.fillStyle = '#fff';
-    for (let i = 0; i < 3; i++) {
-      for (let j = 0; j < 2; j++) {
+    for (let i = 0; i < Math.ceil((archWidth + 6) / squareSize); i++) {
+      for (let j = 0; j < Math.ceil(bannerH / squareSize); j++) {
         if ((i + j) % 2 === 0) {
-          gameCtx.fillRect(x + 5 + i * 8, y - 48 + j * 8, 6, 6);
+          gameCtx.fillStyle = '#fff';
+          gameCtx.fillRect(
+            x - archWidth/2 - 3 + i * squareSize,
+            bannerY + j * squareSize,
+            squareSize,
+            Math.min(squareSize, bannerH - j * squareSize)
+          );
         }
       }
     }
 
-    // Label
+    // Border
+    gameCtx.strokeStyle = '#444';
+    gameCtx.lineWidth = 2;
+    gameCtx.strokeRect(x - archWidth/2 - 3, bannerY, archWidth + 6, bannerH);
+
+    // FINISH text below arch
     gameCtx.fillStyle = '#fff';
     gameCtx.font = 'bold 11px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.fillText('FINISH', x, y + 15);
 
   } else if (checkpoint.type === 'spawn') {
-    // Spawn point - player silhouette with down arrow
+    // Spawn point - only visible in build mode
+    if (gameMode !== 'build') {
+      gameCtx.restore();
+      return;
+    }
+
     const spawnColor = '#a855f7'; // Purple
 
     // Down arrow above
@@ -1131,37 +1331,134 @@ function drawPlayer(): void {
   gameCtx.shadowOffsetX = 2;
   gameCtx.shadowOffsetY = 2;
 
-  // Head
-  gameCtx.beginPath();
-  gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
-  gameCtx.stroke();
+  const isMoving = Math.abs(player.vx) > 0.5;
 
-  // Marker tip hairstyle - chisel/wedge shape like a real marker nib
-  gameCtx.fillStyle = playerColor;
-  gameCtx.beginPath();
-  // Wide base on left side of head
-  gameCtx.moveTo(centerX - 8, headY - headRadius + 1);
-  // Flat top edge going right and slightly up
-  gameCtx.lineTo(centerX - 4, headY - headRadius - 5);
-  // Angled chisel edge sloping down to a point on the right
-  gameCtx.lineTo(centerX + 10, headY - headRadius + 4);
-  // Back along the head curve
-  gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 8, headY - headRadius + 1);
-  gameCtx.closePath();
-  gameCtx.fill();
-  gameCtx.stroke();
+  if (isGirlMode) {
+    // === GIRL CHARACTER - solid shapes, no see-through ===
 
-  // Eyes
-  gameCtx.fillStyle = playerColor;
-  gameCtx.beginPath();
-  gameCtx.arc(centerX + 3, headY - 1, 2, 0, Math.PI * 2);
-  gameCtx.fill();
+    // 1. Draw hair first (back layer) - smooth rounded bob
+    gameCtx.fillStyle = playerColor;
+    gameCtx.beginPath();
+    // Start at bottom left of hair
+    gameCtx.moveTo(centerX - headRadius - 2, headY + 8);
+    // Left side going up
+    gameCtx.lineTo(centerX - headRadius - 1, headY - 2);
+    // Curve over the top of head
+    gameCtx.quadraticCurveTo(centerX - headRadius + 2, headY - headRadius - 4, centerX, headY - headRadius - 3);
+    gameCtx.quadraticCurveTo(centerX + headRadius - 2, headY - headRadius - 4, centerX + headRadius + 1, headY - 2);
+    // Right side going down
+    gameCtx.lineTo(centerX + headRadius + 2, headY + 8);
+    // Curve back under
+    gameCtx.quadraticCurveTo(centerX + headRadius, headY + 10, centerX + headRadius - 2, headY + 10);
+    gameCtx.lineTo(centerX - headRadius + 2, headY + 10);
+    gameCtx.quadraticCurveTo(centerX - headRadius, headY + 10, centerX - headRadius - 2, headY + 8);
+    gameCtx.closePath();
+    gameCtx.fill();
 
-  // Body
-  gameCtx.beginPath();
-  gameCtx.moveTo(centerX, bodyStartY);
-  gameCtx.lineTo(centerX, bodyEndY);
-  gameCtx.stroke();
+    // 2. Draw face circle (white/light filled)
+    gameCtx.fillStyle = '#fff';
+    gameCtx.beginPath();
+    gameCtx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
+    gameCtx.fill();
+
+    // 3. Draw bangs on top of face
+    gameCtx.fillStyle = playerColor;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX - headRadius + 2, headY - 2);
+    gameCtx.quadraticCurveTo(centerX - 2, headY - headRadius - 2, centerX, headY - headRadius + 1);
+    gameCtx.quadraticCurveTo(centerX + 2, headY - headRadius - 2, centerX + headRadius - 2, headY - 2);
+    gameCtx.quadraticCurveTo(centerX, headY - 1, centerX - headRadius + 2, headY - 2);
+    gameCtx.closePath();
+    gameCtx.fill();
+
+    // 4. Face features (on white face)
+    gameCtx.fillStyle = playerColor;
+    if (isMoving) {
+      // Running: single side eye + small mouth dash
+      gameCtx.beginPath();
+      gameCtx.arc(centerX + 2, headY, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      // Mouth dash
+      gameCtx.lineWidth = 2;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, headY + 4);
+      gameCtx.lineTo(centerX + 4, headY + 4);
+      gameCtx.stroke();
+      gameCtx.lineWidth = 3;
+    } else {
+      // Standing: two eyes + smile
+      gameCtx.beginPath();
+      gameCtx.arc(centerX - 3, headY, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      gameCtx.beginPath();
+      gameCtx.arc(centerX + 3, headY, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      // Smile
+      gameCtx.lineWidth = 1.5;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY + 3, 2.5, 0.2 * Math.PI, 0.8 * Math.PI);
+      gameCtx.stroke();
+      gameCtx.lineWidth = 3;
+    }
+
+    // 5. Dress body - solid triangle
+    gameCtx.fillStyle = playerColor;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyStartY);
+    gameCtx.lineTo(centerX - 10, bodyEndY + 2);
+    gameCtx.lineTo(centerX + 10, bodyEndY + 2);
+    gameCtx.closePath();
+    gameCtx.fill();
+
+  } else {
+    // === BOY CHARACTER - stick figure style ===
+
+    // Head circle (stroked)
+    gameCtx.beginPath();
+    gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+    gameCtx.stroke();
+
+    // Hair - marker tip style
+    gameCtx.fillStyle = playerColor;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX - 8, headY - headRadius + 1);
+    gameCtx.lineTo(centerX - 4, headY - headRadius - 5);
+    gameCtx.lineTo(centerX + 10, headY - headRadius + 4);
+    gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 8, headY - headRadius + 1);
+    gameCtx.closePath();
+    gameCtx.fill();
+    gameCtx.stroke();
+
+    // Face
+    gameCtx.fillStyle = playerColor;
+    if (isMoving) {
+      // Running: single side eye + mouth dash
+      gameCtx.beginPath();
+      gameCtx.arc(centerX + 3, headY - 1, 2, 0, Math.PI * 2);
+      gameCtx.fill();
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX + 1, headY + 4);
+      gameCtx.lineTo(centerX + 5, headY + 4);
+      gameCtx.stroke();
+    } else {
+      // Standing: two eyes + smile
+      gameCtx.beginPath();
+      gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      gameCtx.beginPath();
+      gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY + 3, 3, 0.1 * Math.PI, 0.9 * Math.PI);
+      gameCtx.stroke();
+    }
+
+    // Stick body
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyStartY);
+    gameCtx.lineTo(centerX, bodyEndY);
+    gameCtx.stroke();
+  }
 
   // Animation
   const walkCycle = Math.sin(player.animFrame * Math.PI);

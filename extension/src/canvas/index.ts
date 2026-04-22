@@ -4,6 +4,8 @@
  */
 
 import { getColor, getSize, getOpacity, getBrush, getEraser, getTextStyle, getPendingText, clearPendingText } from '@/ui';
+import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, isFirestoreAvailable, isLoggedIn } from '@/db';
+import { onAuthStateChanged } from '@/auth';
 
 let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -43,7 +45,11 @@ interface TextItem {
 
 type DrawItem = Stroke | TextItem;
 
+// Current user's items (editable)
 let items: DrawItem[] = [];
+// Other users' items (read-only, rendered in background)
+let otherUsersItems: DrawItem[] = [];
+
 let currentStroke: { x: number; y: number }[] = [];
 let currentAnchor: { element: Element; selector: string; bounds: DOMRect } | null = null;
 
@@ -209,6 +215,9 @@ export function initCanvas(): void {
 
   loadDrawings();
 
+  // Listen for auth changes to reload cloud drawings
+  setupAuthListener();
+
   console.log('[OpenOverlay] Canvas initialized');
 }
 
@@ -249,7 +258,7 @@ function onPointerDown(e: PointerEvent): void {
   if (currentMode !== 'draw') return;
 
   isDrawing = true;
-  rainbowHue = 0;
+  // Don't reset rainbowHue - let it continue cycling across strokes
 
   const anchor = findAnchorElement(e.clientX, e.clientY);
   if (anchor) {
@@ -861,7 +870,8 @@ function redraw(): void {
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
 
-  for (const item of items) {
+  // Helper to render a single item
+  const renderItem = (item: DrawItem, isOtherUser: boolean = false) => {
     let el: Element | null = null;
 
     try {
@@ -870,10 +880,10 @@ function redraw(): void {
       // Invalid selector
     }
 
-    if (!el) continue;
+    if (!el) return;
 
     const domRect = el.getBoundingClientRect();
-    if (domRect.width === 0 || domRect.height === 0) continue;
+    if (domRect.width === 0 || domRect.height === 0) return;
 
     const rect = {
       x: domRect.left + scrollX,
@@ -884,14 +894,24 @@ function redraw(): void {
 
     if (item.type === 'text') {
       drawTextSaved(item, rect);
-      // Draw selection handles if selected
-      if (item.id === selectedTextId) {
+      // Draw selection handles if selected (only for own items)
+      if (!isOtherUser && item.id === selectedTextId) {
         drawTextSelection(item, rect);
       }
     } else {
       // Default to stroke (handles old items without type field)
       drawStrokeSaved(item as Stroke, rect);
     }
+  };
+
+  // Draw other users' items first (background layer)
+  for (const item of otherUsersItems) {
+    renderItem(item, true);
+  }
+
+  // Draw current user's items on top (editable)
+  for (const item of items) {
+    renderItem(item, false);
   }
 }
 
@@ -1113,16 +1133,27 @@ function undoStroke(): void {
   }
 }
 
-function clearStrokes(): void {
+async function clearStrokes(): Promise<void> {
   // Skip if game mode is active - game handles its own clear
   if (isGameMode) return;
 
+  // Only clear current user's items (others' items stay)
   items = [];
+
+  // Clear from localStorage
+  const pageKey = getPageKey();
+  localStorage.removeItem(`oo_drawing_${pageKey}`);
+
+  // Clear from cloud if logged in
+  if (isLoggedIn()) {
+    await deleteDrawingFromCloud(pageKey);
+  }
+
   redraw();
-  console.log('[OpenOverlay] Cleared all items');
+  console.log('[OpenOverlay] Cleared your items (others\' items preserved)');
 }
 
-function saveDrawing(): void {
+async function saveDrawing(): Promise<void> {
   console.log('[OpenOverlay] Saving', items.length, 'items');
 
   // Clear text selection
@@ -1130,7 +1161,14 @@ function saveDrawing(): void {
 
   const pageKey = getPageKey();
   const data = JSON.stringify(items);
+
+  // Always save to localStorage (fast, works offline)
   localStorage.setItem(`oo_drawing_${pageKey}`, data);
+
+  // Also save to cloud if logged in (makes it public)
+  if (isLoggedIn()) {
+    await saveDrawingToCloud(pageKey, window.location.href, items);
+  }
 
   redraw();
   console.log('[OpenOverlay] Drawing saved');
@@ -1141,14 +1179,38 @@ function cancelDrawing(): void {
   loadDrawings();
 }
 
-function loadDrawings(): void {
+async function loadDrawings(): Promise<void> {
   const pageKey = getPageKey();
+
+  // Try to load public drawings from cloud (all users' contributions)
+  if (isFirestoreAvailable()) {
+    const cloudData = await loadDrawingsFromCloud(pageKey);
+    if (cloudData !== null) {
+      // My items are editable
+      items = cloudData.myItems;
+      // Others' items are read-only (rendered in background)
+      otherUsersItems = cloudData.otherItems;
+
+      // Update localStorage with my items
+      localStorage.setItem(`oo_drawing_${pageKey}`, JSON.stringify(items));
+
+      console.log('[OpenOverlay] Loaded from cloud:', items.length, 'mine,', otherUsersItems.length, 'from others');
+      if (cloudData.contributors.length > 0) {
+        console.log('[OpenOverlay] Contributors:', cloudData.contributors.map(c => c.displayName).join(', '));
+      }
+      redraw();
+      return;
+    }
+  }
+
+  // Fall back to localStorage (offline or no cloud data)
+  otherUsersItems = []; // No other users' items when offline
   const data = localStorage.getItem(`oo_drawing_${pageKey}`);
 
   if (data) {
     try {
       items = JSON.parse(data);
-      console.log('[OpenOverlay] Loaded', items.length, 'items');
+      console.log('[OpenOverlay] Loaded', items.length, 'items from localStorage');
       redraw();
     } catch (e) {
       console.warn('[OpenOverlay] Failed to load drawings');
@@ -1163,155 +1225,130 @@ function getPageKey(): string {
   return btoa(window.location.href).slice(0, 32);
 }
 
+// Reload drawings when auth state changes
+function setupAuthListener(): void {
+  onAuthStateChanged((user) => {
+    if (user) {
+      console.log('[OpenOverlay] User logged in, reloading drawings from cloud');
+    } else {
+      console.log('[OpenOverlay] User logged out, reloading public drawings');
+    }
+    // Always reload to get current state (public drawings visible even when logged out)
+    loadDrawings();
+  });
+}
+
 /**
  * Get collision surfaces from all drawn items for game physics
  * Returns array of platform rectangles the player can land on
  */
-export function getCollisionSurfaces(): { x: number; y: number; width: number; height: number }[] {
-  const surfaces: { x: number; y: number; width: number; height: number }[] = [];
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
-
-
-  // First, collect all eraser stroke regions
-  const erasedRegions: { x: number; y: number; radius: number }[] = [];
-  for (const item of items) {
-    if (item.type === 'text') continue;
-    const stroke = item as Stroke;
-    if (!stroke.eraser) continue;
-
-    let el: Element | null = null;
-    try {
-      el = document.querySelector(item.anchorSelector);
-    } catch { }
-    if (!el) continue;
-
-    const domRect = el.getBoundingClientRect();
-    const rect = {
-      x: domRect.left + scrollX,
-      y: domRect.top + scrollY,
-      width: domRect.width,
-      height: domRect.height,
-    };
-
-    // Add erased points - use actual eraser radius, not inflated
-    const eraserRadius = (stroke.width || 20) / 2;
-    for (const p of stroke.points) {
-      erasedRegions.push({
-        x: rect.x + p.x * rect.width,
-        y: rect.y + p.y * rect.height,
-        radius: eraserRadius,
-      });
-    }
+/**
+ * Check if there are solid (drawn) pixels at the given position
+ * Uses actual canvas pixel data for pixel-perfect collision
+ */
+export function checkPixelCollision(x: number, y: number, width: number, height: number): {
+  floor: boolean;
+  floorY: number;
+  ceiling: boolean;
+  ceilingY: number;
+} {
+  if (!canvas || !ctx) {
+    return { floor: false, floorY: 0, ceiling: false, ceilingY: 0 };
   }
 
-  // Helper to check if a point is in an erased region
-  const isErased = (px: number, py: number): boolean => {
-    for (const region of erasedRegions) {
-      const dist = Math.hypot(px - region.x, py - region.y);
-      if (dist < region.radius) return true;
-    }
-    return false;
-  };
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const dpr = window.devicePixelRatio || 1;
 
-  for (const item of items) {
-    let el: Element | null = null;
-    try {
-      el = document.querySelector(item.anchorSelector);
-    } catch { }
+  let floor = false;
+  let floorY = 0;
+  let ceiling = false;
+  let ceilingY = 0;
 
-    if (!el) continue;
+  // Use center of player for checks, with some width
+  const checkWidth = Math.max(1, Math.floor(width * 0.5 * dpr));
+  const centerX = Math.floor((x + width / 2 - scrollX) * dpr);
+  const checkStartX = Math.max(0, centerX - Math.floor(checkWidth / 2));
 
-    const domRect = el.getBoundingClientRect();
-    if (domRect.width === 0 || domRect.height === 0) continue;
+  try {
+    // FLOOR CHECK: Check a region around feet level
+    // Start checking from 5px above feet to 15px below
+    const feetPageY = y + height;
+    const scanStartY = Math.floor((feetPageY - 5 - scrollY) * dpr);
+    const scanHeight = Math.floor(20 * dpr);
 
-    const rect = {
-      x: domRect.left + scrollX,
-      y: domRect.top + scrollY,
-      width: domRect.width,
-      height: domRect.height,
-    };
+    if (checkStartX >= 0 && scanStartY >= 0 &&
+        checkStartX + checkWidth <= canvas.width &&
+        scanStartY + scanHeight <= canvas.height) {
 
-    if (item.type === 'text') {
-      // Text collision box
-      const textItem = item as TextItem;
-      const textX = rect.x + textItem.x * rect.width;
-      const textY = rect.y + textItem.y * rect.height;
+      const footData = ctx.getImageData(checkStartX, scanStartY, checkWidth, scanHeight);
 
-      // Skip if text center is in erased region
-      if (ctx && !isErased(textX + 20, textY + textItem.size / 2)) {
-        ctx.font = `bold ${textItem.size || 32}px Impact, Arial, sans-serif`;
-        const metrics = ctx.measureText(textItem.text);
-        surfaces.push({
-          x: textX,
-          y: textY,
-          width: metrics.width,
-          height: textItem.size,
-        });
-      }
-    } else {
-      // Strokes (including legacy items without type field)
-      const stroke = item as Stroke;
-      // Skip eraser strokes - they don't create collision
-      if (stroke.eraser) continue;
-
-      const strokeWidth = stroke.width || 4;
-
-      // Convert relative points to absolute
-      const pixelPoints = stroke.points.map(p => ({
-        x: rect.x + p.x * rect.width,
-        y: rect.y + p.y * rect.height,
-      }));
-
-      if (pixelPoints.length < 2) continue;
-
-      // Create collision surfaces along the stroke path
-      // Platform sits at the TOP of the visual stroke
-      const platformWidth = Math.max(strokeWidth * 2, 25);
-      const platformHeight = 15;
-
-      // Interpolate between points to fill gaps
-      for (let i = 0; i < pixelPoints.length; i++) {
-        const curr = pixelPoints[i];
-
-        // Skip if this point was erased
-        if (isErased(curr.x, curr.y)) continue;
-
-        // Add surface at this point
-        surfaces.push({
-          x: curr.x - platformWidth / 2,
-          y: curr.y - strokeWidth / 2,
-          width: platformWidth,
-          height: platformHeight,
-        });
-
-        // Interpolate to next point if exists
-        if (i < pixelPoints.length - 1) {
-          const next = pixelPoints[i + 1];
-          const dx = next.x - curr.x;
-          const dy = next.y - curr.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-
-          // Add intermediate surfaces every 10 pixels
-          const steps = Math.floor(dist / 10);
-          for (let s = 1; s < steps; s++) {
-            const t = s / steps;
-            const px = curr.x + dx * t;
-            const py = curr.y + dy * t;
-
-            if (isErased(px, py)) continue;
-
-            surfaces.push({
-              x: px - platformWidth / 2,
-              y: py - strokeWidth / 2,
-              width: platformWidth,
-              height: platformHeight,
-            });
+      // Find the first row with solid pixels (top of surface)
+      for (let row = 0; row < scanHeight; row++) {
+        let hasPixel = false;
+        for (let col = 0; col < checkWidth; col++) {
+          const idx = (row * checkWidth + col) * 4;
+          const alpha = footData.data[idx + 3];
+          if (alpha > 30) {
+            hasPixel = true;
+            break;
           }
+        }
+        if (hasPixel) {
+          // Found solid pixels - this is the floor surface
+          // Convert back to page coordinates
+          const surfaceY = scanStartY / dpr + scrollY + row / dpr;
+          // Only count as floor if surface is at or below feet level
+          if (surfaceY >= feetPageY - 10) {
+            floor = true;
+            floorY = surfaceY;
+          }
+          break;
         }
       }
     }
+
+    // CEILING CHECK: Check above head
+    const headPageY = y;
+    const ceilScanStart = Math.max(0, Math.floor((headPageY - 15 - scrollY) * dpr));
+    const ceilScanHeight = Math.floor(15 * dpr);
+
+    if (checkStartX >= 0 && ceilScanStart >= 0 &&
+        checkStartX + checkWidth <= canvas.width &&
+        ceilScanStart + ceilScanHeight <= canvas.height) {
+
+      const headData = ctx.getImageData(checkStartX, ceilScanStart, checkWidth, ceilScanHeight);
+
+      // Find the lowest row with solid pixels (bottom of ceiling)
+      for (let row = ceilScanHeight - 1; row >= 0; row--) {
+        let hasPixel = false;
+        for (let col = 0; col < checkWidth; col++) {
+          const idx = (row * checkWidth + col) * 4;
+          const alpha = headData.data[idx + 3];
+          if (alpha > 30) {
+            hasPixel = true;
+            break;
+          }
+        }
+        if (hasPixel) {
+          const surfaceY = ceilScanStart / dpr + scrollY + (row + 1) / dpr;
+          // Only count as ceiling if it's above head
+          if (surfaceY <= headPageY + 5) {
+            ceiling = true;
+            ceilingY = surfaceY;
+          }
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    // getImageData can fail
   }
 
-  return surfaces;
+  return { floor, floorY, ceiling, ceilingY };
+}
+
+// Legacy function for compatibility - now returns empty since we use pixel collision
+export function getCollisionSurfaces(): { x: number; y: number; width: number; height: number }[] {
+  return [];
 }

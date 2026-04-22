@@ -357,3 +357,131 @@ export async function searchUsers(searchTerm: string, maxResults = 10): Promise<
 
   return snapshot.docs.map(docSnap => docSnap.data() as UserProfile);
 }
+
+// ============ SOCIAL DRAWING SYNC ============
+
+export interface PageContribution {
+  userId: string;
+  userDisplayName: string;
+  userPhotoURL: string;
+  items: string; // JSON stringified array of their drawings
+  updatedAt: Timestamp;
+}
+
+export interface CombinedDrawings {
+  myItems: any[];           // Current user's items (editable)
+  otherItems: any[];        // Other users' items (read-only)
+  contributors: { userId: string; displayName: string; photoURL: string }[];
+}
+
+/**
+ * Save current user's drawings to a page (public)
+ */
+export async function saveDrawingToCloud(pageKey: string, pageUrl: string, items: any[]): Promise<boolean> {
+  const user = getCurrentUser();
+  if (!db || !user) {
+    console.log('[OpenOverlay] Not logged in, skipping cloud save');
+    return false;
+  }
+
+  try {
+    // Save to pageDrawings/{pageKey}/contributors/{userId}
+    const contributorRef = doc(db, 'pageDrawings', pageKey, 'contributors', user.uid);
+    await setDoc(contributorRef, {
+      userId: user.uid,
+      userDisplayName: user.displayName || 'Anonymous',
+      userPhotoURL: user.photoURL || '',
+      pageUrl,
+      items: JSON.stringify(items),
+      updatedAt: serverTimestamp(),
+    });
+    console.log('[OpenOverlay] Drawing saved to cloud (public)');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to save drawing to cloud:', err);
+    return false;
+  }
+}
+
+/**
+ * Load ALL users' drawings for a page
+ * Returns combined drawings from all contributors
+ */
+export async function loadDrawingsFromCloud(pageKey: string): Promise<CombinedDrawings | null> {
+  if (!db) return null;
+
+  const user = getCurrentUser();
+
+  try {
+    const contributorsRef = collection(db, 'pageDrawings', pageKey, 'contributors');
+    const snapshot = await getDocs(contributorsRef);
+
+    const myItems: any[] = [];
+    const otherItems: any[] = [];
+    const contributors: { userId: string; displayName: string; photoURL: string }[] = [];
+
+    snapshot.docs.forEach(docSnap => {
+      const data = docSnap.data() as PageContribution;
+      const items = JSON.parse(data.items || '[]');
+
+      contributors.push({
+        userId: data.userId,
+        displayName: data.userDisplayName,
+        photoURL: data.userPhotoURL,
+      });
+
+      if (user && data.userId === user.uid) {
+        // Current user's items
+        myItems.push(...items);
+      } else {
+        // Other users' items - tag them with owner info
+        items.forEach((item: any) => {
+          otherItems.push({
+            ...item,
+            _ownerId: data.userId,
+            _ownerName: data.userDisplayName,
+            _readOnly: true,
+          });
+        });
+      }
+    });
+
+    console.log('[OpenOverlay] Loaded drawings:', myItems.length, 'mine,', otherItems.length, 'from others');
+    return { myItems, otherItems, contributors };
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to load drawings from cloud:', err);
+    return null;
+  }
+}
+
+/**
+ * Delete current user's drawings from a page
+ */
+export async function deleteDrawingFromCloud(pageKey: string): Promise<boolean> {
+  const user = getCurrentUser();
+  if (!db || !user) return false;
+
+  try {
+    const contributorRef = doc(db, 'pageDrawings', pageKey, 'contributors', user.uid);
+    await deleteDoc(contributorRef);
+    console.log('[OpenOverlay] Drawing deleted from cloud');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to delete drawing from cloud:', err);
+    return false;
+  }
+}
+
+/**
+ * Check if Firestore is available
+ */
+export function isFirestoreAvailable(): boolean {
+  return db !== null;
+}
+
+/**
+ * Check if user is logged in
+ */
+export function isLoggedIn(): boolean {
+  return getCurrentUser() !== null;
+}
