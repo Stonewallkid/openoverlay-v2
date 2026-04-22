@@ -139,100 +139,62 @@ const STYLES = `
     border-radius: 12px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.4);
     z-index: 2147483646;
-    width: 320px;
+    max-width: 320px;
+    min-width: 200px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     pointer-events: auto;
+    padding: 14px;
   }
 
-  .oo-popup .popup-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 12px;
-    border-bottom: 1px solid #333;
+  .oo-popup .popup-quote {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.3;
+    margin-bottom: 8px;
   }
 
-  .oo-popup .popup-header .author-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .oo-popup .popup-header .avatar {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #333;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  .oo-popup .popup-author {
+    text-align: right;
     color: #888;
     font-size: 12px;
+    margin-bottom: 10px;
   }
 
-  .oo-popup .popup-header .author-name {
-    color: #fff;
-    font-weight: 600;
-    font-size: 13px;
-  }
-
-  .oo-popup .popup-header .timestamp {
-    color: #666;
-    font-size: 11px;
-  }
-
-  .oo-popup .popup-header .maximize-btn {
-    background: none;
-    border: none;
-    color: #666;
-    font-size: 16px;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-  }
-
-  .oo-popup .popup-header .maximize-btn:hover {
-    background: #333;
-    color: #fff;
-  }
-
-  .oo-popup .popup-comment {
-    padding: 12px;
-    color: #ddd;
-    font-size: 14px;
-    line-height: 1.4;
-    border-bottom: 1px solid #333;
+  .oo-popup .popup-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
   }
 
   .oo-popup .popup-reactions {
     display: flex;
-    gap: 6px;
-    padding: 10px 12px;
+    gap: 4px;
     flex-wrap: wrap;
-    border-bottom: 1px solid #333;
-    position: relative;
+    flex: 1;
   }
 
   .oo-popup .reaction {
     background: #222;
     border: 1px solid #333;
-    border-radius: 14px;
-    padding: 3px 8px;
+    border-radius: 12px;
+    padding: 2px 6px;
     font-size: 12px;
     cursor: pointer;
     transition: background 0.1s;
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
 
   .oo-popup .reaction:hover {
     background: #333;
   }
 
-  .oo-popup .reaction .emoji {
-    margin-right: 3px;
-  }
-
   .oo-popup .reaction .count {
     color: #888;
+    font-size: 11px;
   }
 
   .oo-popup .reaction.active {
@@ -240,85 +202,83 @@ const STYLES = `
     border-color: #22c55e;
   }
 
-  .oo-popup .add-reaction {
-    background: #1a1a1a;
-    border: 1px dashed #444;
+  .oo-popup .popup-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .oo-popup .comment-btn {
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 12px;
+    cursor: pointer;
     color: #888;
-    font-size: 14px;
-    min-width: 32px;
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 4px;
+  }
+
+  .oo-popup .comment-btn:hover {
+    background: #333;
+    color: #fff;
+  }
+
+  .oo-popup .add-reaction {
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 2px 6px;
+    font-size: 14px;
+    cursor: pointer;
+    color: #888;
   }
 
   .oo-popup .add-reaction:hover {
+    background: #333;
     border-color: #22c55e;
     color: #22c55e;
   }
 
-  .oo-popup .popup-replies {
-    max-height: 150px;
-    overflow-y: auto;
-    padding: 8px 12px;
-    border-bottom: 1px solid #333;
+  .oo-popup .maximize-btn {
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 4px;
   }
 
-  .oo-popup .popup-replies:empty {
+  .oo-popup .maximize-btn:hover {
+    color: #fff;
+  }
+
+  .oo-popup .popup-reply-section {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #333;
     display: none;
   }
 
-  .oo-popup .mini-reply {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 8px;
-    font-size: 13px;
-  }
-
-  .oo-popup .mini-reply:last-child {
-    margin-bottom: 0;
-  }
-
-  .oo-popup .mini-reply .mini-avatar {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: #333;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #888;
-    font-size: 10px;
-    flex-shrink: 0;
-  }
-
-  .oo-popup .mini-reply .reply-content {
-    flex: 1;
-  }
-
-  .oo-popup .mini-reply .reply-author {
-    color: #aaa;
-    font-weight: 600;
-    margin-right: 6px;
-  }
-
-  .oo-popup .mini-reply .reply-text {
-    color: #ccc;
+  .oo-popup .popup-reply-section.open {
+    display: block;
   }
 
   .oo-popup .popup-reply-input {
     display: flex;
-    gap: 8px;
-    padding: 10px 12px;
+    gap: 6px;
   }
 
   .oo-popup .popup-reply-input input {
     flex: 1;
     background: #222;
     border: 1px solid #333;
-    border-radius: 16px;
-    padding: 8px 12px;
+    border-radius: 14px;
+    padding: 6px 10px;
     color: #fff;
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .oo-popup .popup-reply-input input:focus {
@@ -330,15 +290,33 @@ const STYLES = `
     background: #22c55e;
     border: none;
     border-radius: 50%;
-    width: 32px;
-    height: 32px;
+    width: 26px;
+    height: 26px;
     color: white;
-    font-size: 14px;
+    font-size: 12px;
     cursor: pointer;
   }
 
-  .oo-popup .popup-reply-input button:hover {
-    background: #1ea34b;
+  .oo-popup .quick-emojis {
+    display: flex;
+    gap: 2px;
+    margin-top: 8px;
+  }
+
+  .oo-popup .quick-emoji {
+    background: none;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    opacity: 0.6;
+    transition: opacity 0.1s, transform 0.1s;
+  }
+
+  .oo-popup .quick-emoji:hover {
+    opacity: 1;
+    transform: scale(1.2);
   }
 
   .oo-popup-emoji-picker {
@@ -941,13 +919,12 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
   if (!annotationRoot) return;
 
   currentPopupAnnotation = annotation;
-  const timeAgo = formatTimeAgo(annotation.createdAt);
 
   const popup = document.createElement('div');
   popup.className = 'oo-popup';
 
   // Position popup near click, but keep on screen
-  let left = e.pageX - 160;
+  let left = e.pageX - 100;
   let top = e.pageY + 15;
 
   // Keep on screen
@@ -957,35 +934,40 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
   popup.style.left = `${left}px`;
   popup.style.top = `${top}px`;
 
+  // Only show reactions that have been used
+  const usedReactions = annotation.reactions.filter(r => r.count > 0);
+  const replyCount = annotation.replies.length;
+
   popup.innerHTML = `
-    <div class="popup-header">
-      <div class="author-info">
-        <div class="avatar">${annotation.authorName.charAt(0).toUpperCase()}</div>
-        <div>
-          <div class="author-name">${escapeHtml(annotation.authorName)}</div>
-          <div class="timestamp">${timeAgo}</div>
-        </div>
-      </div>
-      <button class="maximize-btn" title="Open in sidebar">⛶</button>
-    </div>
-    <div class="popup-comment">${escapeHtml(annotation.comment)}</div>
-    <div class="popup-reactions" id="popup-reactions">
-      ${renderPopupReactions(annotation)}
-    </div>
-    <div class="popup-replies" id="popup-replies">
-      ${annotation.replies.slice(-3).map(reply => `
-        <div class="mini-reply">
-          <div class="mini-avatar">${reply.authorName.charAt(0).toUpperCase()}</div>
-          <div class="reply-content">
-            <span class="reply-author">${escapeHtml(reply.authorName)}</span>
-            <span class="reply-text">${escapeHtml(reply.text)}</span>
+    <div class="popup-quote">"${escapeHtml(annotation.comment)}"</div>
+    <div class="popup-author">— ${escapeHtml(annotation.authorName)}</div>
+    <div class="popup-footer">
+      <div class="popup-reactions" id="popup-reactions">
+        ${usedReactions.map(r => `
+          <div class="reaction ${r.userReacted ? 'active' : ''}" data-emoji="${r.emoji}">
+            <span class="emoji">${r.emoji}</span>
+            <span class="count">${r.count}</span>
           </div>
-        </div>
-      `).join('')}
+        `).join('')}
+      </div>
+      <div class="popup-actions">
+        <button class="comment-btn" id="popup-comment-btn" title="Comments">
+          💬 ${replyCount > 0 ? replyCount : ''}
+        </button>
+        <button class="add-reaction" id="popup-add-reaction" title="React">+</button>
+        <button class="maximize-btn" title="Open in sidebar">⛶</button>
+      </div>
     </div>
-    <div class="popup-reply-input">
-      <input type="text" placeholder="Reply..." />
-      <button>➤</button>
+    <div class="popup-reply-section" id="popup-reply-section">
+      <div class="popup-reply-input">
+        <input type="text" placeholder="Add a comment..." />
+        <button>➤</button>
+      </div>
+      <div class="quick-emojis">
+        ${REACTION_EMOJIS.slice(0, 6).map(emoji => `
+          <button class="quick-emoji" data-emoji="${emoji}">${emoji}</button>
+        `).join('')}
+      </div>
     </div>
   `;
 
@@ -1013,8 +995,73 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
     openCommentPanel(annotation);
   });
 
-  // Setup reactions
-  setupPopupReactions(popup, annotation);
+  // Comment button - toggle reply section
+  const commentBtn = popup.querySelector('#popup-comment-btn');
+  const replySection = popup.querySelector('#popup-reply-section');
+  commentBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    replySection?.classList.toggle('open');
+    if (replySection?.classList.contains('open')) {
+      const input = popup.querySelector('.popup-reply-input input') as HTMLInputElement;
+      input?.focus();
+    }
+  });
+
+  // Setup existing reaction toggles
+  popup.querySelectorAll('.reaction').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emoji = (btn as HTMLElement).dataset.emoji;
+      if (!emoji) return;
+
+      const reaction = annotation.reactions.find(r => r.emoji === emoji);
+      if (reaction) {
+        if (reaction.userReacted) {
+          reaction.count--;
+          reaction.userReacted = false;
+          if (reaction.count <= 0) {
+            annotation.reactions = annotation.reactions.filter(r => r.emoji !== emoji);
+          }
+        } else {
+          reaction.count++;
+          reaction.userReacted = true;
+        }
+        saveAnnotations();
+        // Refresh popup
+        hideInteractivePopup();
+        showInteractivePopup(annotation, e as MouseEvent);
+      }
+    });
+  });
+
+  // Add reaction button - show picker
+  popup.querySelector('#popup-add-reaction')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const reactionsContainer = popup.querySelector('#popup-reactions') as HTMLElement;
+    showPopupEmojiPicker(popup, annotation, reactionsContainer);
+  });
+
+  // Quick emoji buttons
+  popup.querySelectorAll('.quick-emoji').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emoji = (btn as HTMLElement).dataset.emoji;
+      if (!emoji) return;
+
+      let reaction = annotation.reactions.find(r => r.emoji === emoji);
+      if (reaction) {
+        if (!reaction.userReacted) {
+          reaction.count++;
+          reaction.userReacted = true;
+        }
+      } else {
+        annotation.reactions.push({ emoji, count: 1, userReacted: true });
+      }
+      saveAnnotations();
+      hideInteractivePopup();
+      showInteractivePopup(annotation, e as MouseEvent);
+    });
+  });
 
   // Reply input
   const replyInput = popup.querySelector('.popup-reply-input input') as HTMLInputElement;
@@ -1031,23 +1078,11 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
     });
 
     saveAnnotations();
-
-    // Add reply to popup
-    const repliesContainer = popup.querySelector('#popup-replies');
-    if (repliesContainer) {
-      const replyHtml = `
-        <div class="mini-reply">
-          <div class="mini-avatar">Y</div>
-          <div class="reply-content">
-            <span class="reply-author">You</span>
-            <span class="reply-text">${escapeHtml(text)}</span>
-          </div>
-        </div>
-      `;
-      repliesContainer.insertAdjacentHTML('beforeend', replyHtml);
-    }
-
     replyInput.value = '';
+
+    // Update comment count
+    const btn = popup.querySelector('#popup-comment-btn');
+    if (btn) btn.innerHTML = `💬 ${annotation.replies.length}`;
   };
 
   replyBtn?.addEventListener('click', (e) => {
@@ -1064,9 +1099,6 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
 
   annotationRoot.appendChild(popup);
   popupElement = popup;
-
-  // Focus reply input
-  setTimeout(() => replyInput?.focus(), 50);
 
   // Close on outside click
   setTimeout(() => {
