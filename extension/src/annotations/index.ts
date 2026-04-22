@@ -886,48 +886,104 @@ function applyHighlights(): void {
 }
 
 function highlightAnnotation(annotation: Annotation): void {
-  // Find the text in the document
-  const walker = document.createTreeWalker(
-    document.body,
-    NodeFilter.SHOW_TEXT,
-    null
-  );
+  // Try to find the exact location using stored selector first
+  let targetNode: Node | null = null;
+  let startOffset = 0;
 
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    const textContent = node.textContent || '';
-    const index = textContent.indexOf(annotation.text);
+  try {
+    // Try to find the anchor element using the stored selector
+    const anchorElement = document.querySelector(annotation.anchorSelector);
+    if (anchorElement) {
+      // Find the text node within this element that contains our text
+      const walker = document.createTreeWalker(
+        anchorElement,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
 
-    if (index !== -1) {
-      const range = document.createRange();
-      range.setStart(node, index);
-      range.setEnd(node, index + annotation.text.length);
+      let node: Node | null;
+      let charCount = 0;
 
-      const highlight = document.createElement('span');
-      highlight.className = 'oo-highlight';
-      highlight.dataset.annotationId = annotation.id;
-      highlight.style.cssText = `
-        background: ${annotation.color}40;
-        border-bottom: 2px solid ${annotation.color};
-        cursor: pointer;
-        transition: background 0.15s;
-      `;
+      while ((node = walker.nextNode())) {
+        const nodeLength = node.textContent?.length || 0;
 
-      // Hover to show popup
-      highlight.addEventListener('mouseenter', (e) => {
-        highlight.style.background = `${annotation.color}60`;
-        showInteractivePopup(annotation, e as MouseEvent, highlight);
-      });
+        // Check if the anchor offset falls within this text node
+        if (charCount + nodeLength >= annotation.anchorOffset) {
+          // Found the right text node, now find the text within it
+          const textContent = node.textContent || '';
+          const localOffset = annotation.anchorOffset - charCount;
 
-      highlight.addEventListener('mouseleave', (e) => {
-        highlight.style.background = `${annotation.color}40`;
-        // Delay hiding to allow mouse to move to popup
-        schedulePopupHide();
-      });
-
-      range.surroundContents(highlight);
-      return; // Only highlight first occurrence
+          // Verify the text matches at this position
+          if (textContent.substring(localOffset).startsWith(annotation.text) ||
+              textContent.includes(annotation.text)) {
+            targetNode = node;
+            // Find exact position of the text in this node
+            const idx = textContent.indexOf(annotation.text);
+            startOffset = idx !== -1 ? idx : localOffset;
+            break;
+          }
+        }
+        charCount += nodeLength;
+      }
     }
+  } catch (e) {
+    // Selector might be invalid, fall back to text search
+  }
+
+  // Fall back to searching by text if selector approach failed
+  if (!targetNode) {
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_TEXT,
+      null
+    );
+
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      const textContent = node.textContent || '';
+      const index = textContent.indexOf(annotation.text);
+
+      if (index !== -1) {
+        targetNode = node;
+        startOffset = index;
+        break;
+      }
+    }
+  }
+
+  if (!targetNode) return;
+
+  // Create the highlight
+  try {
+    const range = document.createRange();
+    range.setStart(targetNode, startOffset);
+    range.setEnd(targetNode, startOffset + annotation.text.length);
+
+    const highlight = document.createElement('span');
+    highlight.className = 'oo-highlight';
+    highlight.dataset.annotationId = annotation.id;
+    highlight.style.cssText = `
+      background: ${annotation.color}40;
+      border-bottom: 2px solid ${annotation.color};
+      cursor: pointer;
+      transition: background 0.15s;
+    `;
+
+    // Hover to show popup
+    highlight.addEventListener('mouseenter', (e) => {
+      highlight.style.background = `${annotation.color}60`;
+      showInteractivePopup(annotation, e as MouseEvent, highlight);
+    });
+
+    highlight.addEventListener('mouseleave', (e) => {
+      highlight.style.background = `${annotation.color}40`;
+      // Delay hiding to allow mouse to move to popup
+      schedulePopupHide();
+    });
+
+    range.surroundContents(highlight);
+  } catch (e) {
+    console.warn('[OpenOverlay] Failed to highlight annotation:', annotation.id, e);
   }
 }
 
