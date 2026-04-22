@@ -1467,6 +1467,7 @@ function openCommentPanel(annotation: Annotation): void {
 
   annotationRoot.appendChild(panel);
   commentPanel = panel;
+  currentCommentAnnotation = annotation;
 
   // Focus reply input
   setTimeout(() => replyInput?.focus(), 100);
@@ -1604,6 +1605,7 @@ function closeCommentPanel(): void {
     commentPanel.remove();
     commentPanel = null;
   }
+  currentCommentAnnotation = null;
 }
 
 function escapeHtml(text: string): string {
@@ -1843,19 +1845,25 @@ function refreshOpenUI(): void {
 function refreshCommentPanel(annotation: Annotation): void {
   if (!commentPanel || !annotationRoot) return;
 
-  const repliesContainer = commentPanel.querySelector('.replies-container');
-  if (!repliesContainer) return;
+  const repliesSection = commentPanel.querySelector('.replies-section');
+  if (!repliesSection) return;
 
-  // Update replies list
-  repliesContainer.innerHTML = annotation.replies.map(reply => `
+  // Update replies list with same structure as openCommentPanel
+  repliesSection.innerHTML = annotation.replies.map(reply => `
     <div class="reply">
-      <div class="reply-author">${escapeHtml(reply.authorName)}</div>
-      <div class="reply-text">${escapeHtml(reply.text)}</div>
-      <div class="reply-time">${formatTimeAgo(reply.createdAt)}</div>
+      <div class="author-info">
+        <div class="avatar">${reply.authorName.charAt(0).toUpperCase()}</div>
+        <div>
+          <div class="author-name">${escapeHtml(reply.authorName)}</div>
+          <div class="timestamp">${formatTimeAgo(reply.createdAt)}</div>
+        </div>
+      </div>
+      <div class="comment-text">${escapeHtml(reply.text)}</div>
     </div>
-  `).join('') || '<div class="no-replies">No comments yet. Be the first!</div>';
+  `).join('');
 
   currentCommentAnnotation = annotation;
+  console.log('[OpenOverlay] Comment panel refreshed with', annotation.replies.length, 'replies');
 }
 
 // ============ BOOKMARKS ============
