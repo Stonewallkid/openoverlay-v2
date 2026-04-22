@@ -1096,6 +1096,11 @@ function cancelPopupHide(): void {
 }
 
 function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl?: HTMLElement): void {
+  // If comment panel is open, don't show popup on hover
+  if (commentPanel) {
+    return;
+  }
+
   // If same annotation popup is already open, just cancel any pending hide
   if (popupElement && currentPopupAnnotation?.id === annotation.id) {
     cancelPopupHide();
@@ -1104,7 +1109,6 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
 
   cancelPopupHide();
   hideInteractivePopup();
-  closeCommentPanel();
   isPopupPinned = false;
 
   if (!annotationRoot) return;
