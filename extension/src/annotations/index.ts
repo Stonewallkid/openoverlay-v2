@@ -7,6 +7,7 @@ import {
   saveAnnotationToCloud,
   deleteAnnotationFromCloud,
   subscribeToAnnotations,
+  fetchAnnotationsFromCloud,
   addReplyToAnnotation,
   toggleReactionOnAnnotation,
   type CloudAnnotation,
@@ -1632,10 +1633,14 @@ function saveAnnotations(): void {
  * Save a single annotation to cloud (for real-time sync)
  */
 async function saveAnnotationToCloudAsync(annotation: Annotation): Promise<void> {
-  if (!isFirestoreAvailable()) return;
+  if (!isFirestoreAvailable()) {
+    console.log('[OpenOverlay] Firestore not available, skipping cloud save');
+    return;
+  }
 
   const user = getCurrentUser();
   const pageKey = getPageKey();
+  console.log('[OpenOverlay] Saving annotation to cloud:', annotation.id, 'pageKey:', pageKey);
 
   const cloudAnnotation: CloudAnnotation = {
     id: annotation.id,
@@ -1717,73 +1722,97 @@ function loadAnnotations(): void {
 /**
  * Set up real-time annotation sync
  */
-function setupRealtimeSync(): void {
+async function setupRealtimeSync(): Promise<void> {
   if (!isFirestoreAvailable()) {
     console.log('[OpenOverlay] Firestore not available, skipping real-time sync');
     return;
   }
 
   const pageKey = getPageKey();
-  const user = getCurrentUser();
+  console.log('[OpenOverlay] Setting up real-time sync for page:', pageKey);
 
-  subscribeToAnnotations(pageKey, (cloudAnnotations) => {
-    // Merge cloud annotations with local ones
-    const merged = new Map<string, Annotation>();
-
-    // Add local annotations first
-    for (const ann of annotations) {
-      merged.set(ann.id, ann);
-    }
-
-    // Update/add cloud annotations
-    for (const cloudAnn of cloudAnnotations) {
-      const localAnn = merged.get(cloudAnn.id);
-
-      // Convert cloud annotation to local format
-      const converted: Annotation = {
-        id: cloudAnn.id,
-        text: cloudAnn.text,
-        anchorSelector: cloudAnn.anchorSelector,
-        anchorOffset: cloudAnn.anchorOffset,
-        focusSelector: cloudAnn.focusSelector,
-        focusOffset: cloudAnn.focusOffset,
-        comment: cloudAnn.comment,
-        color: cloudAnn.color,
-        authorId: cloudAnn.authorId,
-        authorName: cloudAnn.authorName,
-        createdAt: cloudAnn.createdAt,
-        reactions: cloudAnn.reactions.map(r => ({
-          emoji: r.emoji,
-          count: r.count,
-          userReacted: user ? r.users.includes(user.uid) : false
-        })),
-        replies: cloudAnn.replies.map(r => ({
-          authorName: r.authorName,
-          text: r.text,
-          createdAt: r.createdAt
-        }))
-      };
-
-      // Cloud version is newer or doesn't exist locally
-      if (!localAnn || cloudAnn.createdAt >= localAnn.createdAt) {
-        merged.set(cloudAnn.id, converted);
-      }
-    }
-
-    // Update annotations array
-    annotations = Array.from(merged.values());
-
-    // Save merged state to localStorage
-    const pageKey = getPageKey();
-    localStorage.setItem(`oo_annotations_${pageKey}`, JSON.stringify(annotations));
-
-    // Re-apply highlights to show new annotations
-    clearHighlights();
-    applyHighlights();
-
-    // Update any open popup/panel
-    refreshOpenUI();
+  // Try to subscribe to real-time updates
+  const unsubscribe = subscribeToAnnotations(pageKey, (cloudAnnotations) => {
+    handleCloudAnnotations(cloudAnnotations);
   });
+
+  // If subscription failed, try one-time fetch
+  if (!unsubscribe) {
+    console.log('[OpenOverlay] Real-time subscription failed, trying one-time fetch');
+    const cloudAnnotations = await fetchAnnotationsFromCloud(pageKey);
+    handleCloudAnnotations(cloudAnnotations);
+  }
+}
+
+/**
+ * Handle incoming cloud annotations (merge with local)
+ */
+function handleCloudAnnotations(cloudAnnotations: CloudAnnotation[]): void {
+  const user = getCurrentUser();
+  console.log('[OpenOverlay] Processing', cloudAnnotations.length, 'cloud annotations');
+
+  if (cloudAnnotations.length === 0) {
+    console.log('[OpenOverlay] No cloud annotations found');
+    return;
+  }
+
+  // Merge cloud annotations with local ones
+  const merged = new Map<string, Annotation>();
+
+  // Add local annotations first
+  for (const ann of annotations) {
+    merged.set(ann.id, ann);
+  }
+
+  // Update/add cloud annotations
+  for (const cloudAnn of cloudAnnotations) {
+    const localAnn = merged.get(cloudAnn.id);
+
+    // Convert cloud annotation to local format
+    const converted: Annotation = {
+      id: cloudAnn.id,
+      text: cloudAnn.text,
+      anchorSelector: cloudAnn.anchorSelector,
+      anchorOffset: cloudAnn.anchorOffset,
+      focusSelector: cloudAnn.focusSelector,
+      focusOffset: cloudAnn.focusOffset,
+      comment: cloudAnn.comment,
+      color: cloudAnn.color,
+      authorId: cloudAnn.authorId,
+      authorName: cloudAnn.authorName,
+      createdAt: cloudAnn.createdAt,
+      reactions: (cloudAnn.reactions || []).map(r => ({
+        emoji: r.emoji,
+        count: r.count,
+        userReacted: user ? r.users.includes(user.uid) : false
+      })),
+      replies: (cloudAnn.replies || []).map(r => ({
+        authorName: r.authorName,
+        text: r.text,
+        createdAt: r.createdAt
+      }))
+    };
+
+    // Cloud version is newer or doesn't exist locally
+    if (!localAnn || cloudAnn.createdAt >= localAnn.createdAt) {
+      merged.set(cloudAnn.id, converted);
+    }
+  }
+
+  // Update annotations array
+  annotations = Array.from(merged.values());
+  console.log('[OpenOverlay] Merged to', annotations.length, 'total annotations');
+
+  // Save merged state to localStorage
+  const pageKey = getPageKey();
+  localStorage.setItem(`oo_annotations_${pageKey}`, JSON.stringify(annotations));
+
+  // Re-apply highlights to show new annotations
+  clearHighlights();
+  applyHighlights();
+
+  // Update any open popup/panel
+  refreshOpenUI();
 }
 
 /**

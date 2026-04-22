@@ -513,18 +513,29 @@ let annotationUnsubscribe: Unsubscribe | null = null;
  * Save or update an annotation to cloud
  */
 export async function saveAnnotationToCloud(pageKey: string, annotation: CloudAnnotation): Promise<boolean> {
-  if (!db) return false;
+  if (!db) {
+    console.log('[OpenOverlay] Cannot save annotation: Firestore not initialized');
+    return false;
+  }
 
   try {
     const annotationRef = doc(db, 'pageAnnotations', pageKey, 'annotations', annotation.id);
-    await setDoc(annotationRef, {
+    const dataToSave = {
       ...annotation,
+      reactions: annotation.reactions || [],
+      replies: annotation.replies || [],
       updatedAt: serverTimestamp(),
-    }, { merge: true });
-    console.log('[OpenOverlay] Annotation saved to cloud');
+    };
+    console.log('[OpenOverlay] Saving to Firestore:', annotationRef.path);
+    await setDoc(annotationRef, dataToSave, { merge: true });
+    console.log('[OpenOverlay] Annotation saved to cloud successfully');
     return true;
-  } catch (err) {
-    console.error('[OpenOverlay] Failed to save annotation:', err);
+  } catch (err: any) {
+    console.error('[OpenOverlay] Failed to save annotation:', err?.message || err);
+    // Check if it's a permissions error
+    if (err?.code === 'permission-denied') {
+      console.error('[OpenOverlay] Firestore security rules may need to be updated');
+    }
     return false;
   }
 }
@@ -547,23 +558,16 @@ export async function deleteAnnotationFromCloud(pageKey: string, annotationId: s
 }
 
 /**
- * Subscribe to real-time annotation updates for a page
+ * Fetch annotations from cloud (one-time, no real-time)
+ * Used as a fallback when subscription fails
  */
-export function subscribeToAnnotations(
-  pageKey: string,
-  callback: (annotations: CloudAnnotation[]) => void
-): Unsubscribe | null {
-  if (!db) return null;
+export async function fetchAnnotationsFromCloud(pageKey: string): Promise<CloudAnnotation[]> {
+  if (!db) return [];
 
-  // Unsubscribe from previous page if any
-  if (annotationUnsubscribe) {
-    annotationUnsubscribe();
-  }
+  try {
+    const annotationsRef = collection(db, 'pageAnnotations', pageKey, 'annotations');
+    const snapshot = await getDocs(annotationsRef);
 
-  const annotationsRef = collection(db, 'pageAnnotations', pageKey, 'annotations');
-  const q = query(annotationsRef, orderBy('createdAt', 'desc'));
-
-  annotationUnsubscribe = onSnapshot(q, (snapshot) => {
     const annotations: CloudAnnotation[] = [];
     snapshot.forEach((docSnap) => {
       annotations.push({
@@ -571,10 +575,56 @@ export function subscribeToAnnotations(
         ...docSnap.data()
       } as CloudAnnotation);
     });
+
+    // Sort by createdAt client-side to avoid needing Firestore index
+    annotations.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    console.log('[OpenOverlay] Fetched', annotations.length, 'annotations from cloud');
+    return annotations;
+  } catch (error) {
+    console.error('[OpenOverlay] Failed to fetch annotations:', error);
+    return [];
+  }
+}
+
+/**
+ * Subscribe to real-time annotation updates for a page
+ */
+export function subscribeToAnnotations(
+  pageKey: string,
+  callback: (annotations: CloudAnnotation[]) => void
+): Unsubscribe | null {
+  if (!db) {
+    console.log('[OpenOverlay] Cannot subscribe to annotations: Firestore not initialized');
+    return null;
+  }
+
+  // Unsubscribe from previous page if any
+  if (annotationUnsubscribe) {
+    annotationUnsubscribe();
+  }
+
+  const annotationsRef = collection(db, 'pageAnnotations', pageKey, 'annotations');
+
+  // Use simple query without orderBy to avoid requiring Firestore index
+  annotationUnsubscribe = onSnapshot(annotationsRef, (snapshot) => {
+    const annotations: CloudAnnotation[] = [];
+    snapshot.forEach((docSnap) => {
+      annotations.push({
+        id: docSnap.id,
+        ...docSnap.data()
+      } as CloudAnnotation);
+    });
+
+    // Sort client-side
+    annotations.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
     console.log('[OpenOverlay] Real-time update:', annotations.length, 'annotations');
     callback(annotations);
   }, (error) => {
     console.error('[OpenOverlay] Annotation subscription error:', error);
+    // Try one-time fetch as fallback
+    fetchAnnotationsFromCloud(pageKey).then(callback);
   });
 
   return annotationUnsubscribe;
