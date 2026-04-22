@@ -1265,63 +1265,50 @@ export function getCollisionSurfaces(): { x: number; y: number; width: number; h
 
       if (pixelPoints.length < 2) continue;
 
-      // Create platforms along the stroke path
-      // All brushes use the same collision (glow visual effect doesn't affect collision)
-      // Width needs to be wide for solid collision
-      // Height is thin - player walks on TOP of the stroke
-      const platformWidth = Math.max(strokeWidth * 2.5, 35);
-      const platformHeight = 10; // Thin platform at top of stroke
+      // Create collision surfaces along the stroke path
+      // Platform sits at the TOP of the visual stroke
+      const platformWidth = Math.max(strokeWidth * 2, 25);
+      const platformHeight = 15;
 
-      // Calculate total path length
-      let totalLength = 0;
-      for (let i = 1; i < pixelPoints.length; i++) {
-        const dx = pixelPoints[i].x - pixelPoints[i-1].x;
-        const dy = pixelPoints[i].y - pixelPoints[i-1].y;
-        totalLength += Math.sqrt(dx * dx + dy * dy);
-      }
-
-      // Space surfaces close together - must overlap to prevent gaps
-      const spacing = 10;
-      const numSurfaces = Math.max(3, Math.ceil(totalLength / spacing) + 1);
-
-      // Interpolate along the path to place surfaces at regular intervals
-      // This ensures straight lines get surfaces in the middle, not just at points
-      for (let surfIdx = 0; surfIdx < numSurfaces; surfIdx++) {
-        const targetDist = (surfIdx / (numSurfaces - 1)) * totalLength;
-
-        // Find the point at this distance along the path
-        let traveled = 0;
-        let px = pixelPoints[0].x;
-        let py = pixelPoints[0].y;
-
-        for (let i = 1; i < pixelPoints.length; i++) {
-          const dx = pixelPoints[i].x - pixelPoints[i-1].x;
-          const dy = pixelPoints[i].y - pixelPoints[i-1].y;
-          const segLen = Math.sqrt(dx * dx + dy * dy);
-
-          if (traveled + segLen >= targetDist) {
-            // Interpolate within this segment
-            const t = segLen > 0 ? (targetDist - traveled) / segLen : 0;
-            px = pixelPoints[i-1].x + dx * t;
-            py = pixelPoints[i-1].y + dy * t;
-            break;
-          }
-          traveled += segLen;
-          px = pixelPoints[i].x;
-          py = pixelPoints[i].y;
-        }
+      // Interpolate between points to fill gaps
+      for (let i = 0; i < pixelPoints.length; i++) {
+        const curr = pixelPoints[i];
 
         // Skip if this point was erased
-        if (isErased(px, py)) continue;
+        if (isErased(curr.x, curr.y)) continue;
 
-        // Position platform at TOP of the visual stroke
-        // py is the center of the stroke, stroke extends strokeWidth/2 above and below
+        // Add surface at this point
         surfaces.push({
-          x: px - platformWidth / 2,
-          y: py - strokeWidth / 2,  // Top of visual stroke
+          x: curr.x - platformWidth / 2,
+          y: curr.y - strokeWidth / 2,
           width: platformWidth,
           height: platformHeight,
         });
+
+        // Interpolate to next point if exists
+        if (i < pixelPoints.length - 1) {
+          const next = pixelPoints[i + 1];
+          const dx = next.x - curr.x;
+          const dy = next.y - curr.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          // Add intermediate surfaces every 10 pixels
+          const steps = Math.floor(dist / 10);
+          for (let s = 1; s < steps; s++) {
+            const t = s / steps;
+            const px = curr.x + dx * t;
+            const py = curr.y + dy * t;
+
+            if (isErased(px, py)) continue;
+
+            surfaces.push({
+              x: px - platformWidth / 2,
+              y: py - strokeWidth / 2,
+              width: platformWidth,
+              height: platformHeight,
+            });
+          }
+        }
       }
     }
   }

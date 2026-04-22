@@ -534,29 +534,27 @@ function update(dt: number): void {
   const surfaces = getCollisionSurfaces();
 
   // --- COLLISION DETECTION ---
-  // Check ceilings first (when jumping), then walls, then floors
 
-  // Pass 1: Ceiling collision (bump head when jumping up)
+  // Pass 1: Ceiling collision (when jumping up)
   if (player.vy < 0) {
     for (const surface of surfaces) {
       const playerLeft = player.x;
       const playerRight = player.x + player.width;
       const playerTop = player.y;
+      const playerCenterX = player.x + player.width / 2;
 
       const surfLeft = surface.x;
       const surfRight = surface.x + surface.width;
       const surfBottom = surface.y + surface.height;
 
-      // Check horizontal overlap
-      if (playerRight <= surfLeft + 5 || playerLeft >= surfRight - 5) {
+      // Check if player's center is horizontally under the surface
+      if (playerCenterX < surfLeft || playerCenterX > surfRight) {
         continue;
       }
 
       // Check if player's head is hitting the bottom of the surface
-      // Use larger tolerance based on jump speed
-      const tolerance = Math.max(Math.abs(player.vy) * 1.5, 20);
       const headToSurface = surfBottom - playerTop;
-      if (headToSurface >= 0 && headToSurface < tolerance) {
+      if (headToSurface >= 0 && headToSurface < 15) {
         // Bump head - stop upward movement
         player.y = surfBottom;
         player.vy = 1; // Start falling
@@ -565,50 +563,7 @@ function update(dt: number): void {
     }
   }
 
-  // Pass 2: Wall collision (always check, even when on ground)
-  for (const surface of surfaces) {
-    const playerLeft = player.x;
-    const playerRight = player.x + player.width;
-    const playerTop = player.y;
-    const playerBottom = player.y + player.height;
-
-    const surfLeft = surface.x;
-    const surfRight = surface.x + surface.width;
-    const surfTop = surface.y;
-    const surfBottom = surface.y + surface.height;
-
-    // Check for overlap
-    if (playerRight <= surfLeft || playerLeft >= surfRight ||
-        playerBottom <= surfTop || playerTop >= surfBottom) {
-      continue;
-    }
-
-    // Calculate overlaps
-    const overlapLeft = playerRight - surfLeft;
-    const overlapRight = surfRight - playerLeft;
-    const overlapTop = playerBottom - surfTop;
-    const overlapBottom = surfBottom - playerTop;
-    const minOverlapX = Math.min(overlapLeft, overlapRight);
-    const minOverlapY = Math.min(overlapTop, overlapBottom);
-
-    // Skip wall collision if vertical overlap is smaller (it's a floor/ceiling collision)
-    if (minOverlapY < minOverlapX) continue;
-
-    // Can step up onto this surface
-    if (overlapTop > 0 && overlapTop < 15 && player.vy >= 0) continue;
-
-    // Block as wall if horizontal penetration is significant
-    if (minOverlapX > 3 && minOverlapX < 25) {
-      if (overlapLeft < overlapRight) {
-        player.x = surfLeft - player.width;
-      } else {
-        player.x = surfRight;
-      }
-      player.vx = 0;
-    }
-  }
-
-  // Pass 2: Floor collision (find best floor to land on)
+  // Pass 2: Floor collision (when falling down)
   player.onGround = false;
   let bestFloorY = Infinity;
 
@@ -616,22 +571,26 @@ function update(dt: number): void {
     const playerLeft = player.x;
     const playerRight = player.x + player.width;
     const playerBottom = player.y + player.height;
+    const playerCenterX = player.x + player.width / 2;
 
     const surfLeft = surface.x;
     const surfRight = surface.x + surface.width;
     const surfTop = surface.y;
+    const surfBottom = surface.y + surface.height;
+    const surfCenterY = surface.y + surface.height / 2;
 
-    // Check horizontal overlap (player must be over the surface)
-    if (playerRight <= surfLeft + 5 || playerLeft >= surfRight - 5) {
-      continue;
-    }
+    // Check horizontal overlap - use some tolerance
+    const horizontalOverlap = Math.min(playerRight, surfRight) - Math.max(playerLeft, surfLeft);
+    if (horizontalOverlap < 5) continue;
 
-    // Must be falling or stationary (not jumping up)
-    if (player.vy < -2) continue;
+    // Only land when falling down (one-way platform)
+    if (player.vy < 0) continue;
 
-    // Player's feet must be near or past the surface top
-    const feetToSurface = playerBottom - surfTop;
-    if (feetToSurface < 0 || feetToSurface > 25) continue;
+    // Player's feet must be near the surface top
+    // Allow landing if feet are within range of surface top
+    const feetToSurfTop = playerBottom - surfTop;
+    if (feetToSurfTop < -5) continue;  // Feet too high above surface
+    if (feetToSurfTop > 30) continue;  // Feet too far below surface
 
     // This is a valid floor - track the highest one
     if (surfTop < bestFloorY) {
