@@ -291,6 +291,35 @@ const STYLES = `
     color: #f59e0b;
   }
 
+  .oo-popup .delete-btn {
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #666;
+    transition: color 0.15s;
+  }
+
+  .oo-popup .delete-btn:hover {
+    color: #ef4444;
+  }
+
+  .oo-comment-panel .delete-btn {
+    background: #ef4444;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    margin-top: 12px;
+  }
+
+  .oo-comment-panel .delete-btn:hover {
+    background: #dc2626;
+  }
+
   .oo-popup .popup-reply-section {
     margin-top: 10px;
     padding-top: 10px;
@@ -1100,6 +1129,10 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
   const usedReactions = annotation.reactions.filter(r => r.count > 0);
   const replyCount = annotation.replies.length;
 
+  // Check if current user is the author
+  const user = getCurrentUser();
+  const isAuthor = user ? annotation.authorId === user.uid : annotation.authorId === 'local-user';
+
   popup.innerHTML = `
     <div class="popup-quote">"${escapeHtml(annotation.comment)}"</div>
     <div class="popup-author">— ${escapeHtml(annotation.authorName)}</div>
@@ -1119,6 +1152,7 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
         <button class="add-reaction" id="popup-add-reaction" title="React">+</button>
         <button class="bookmark-btn ${bookmarkedIds.has(annotation.id) ? 'active' : ''}" id="popup-bookmark-btn" title="Bookmark">🔖</button>
         <button class="maximize-btn" title="Open in sidebar">⛶</button>
+        ${isAuthor ? '<button class="delete-btn" id="popup-delete-btn" title="Delete annotation">🗑️</button>' : ''}
       </div>
     </div>
     <div class="popup-reply-section" id="popup-reply-section">
@@ -1164,6 +1198,15 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
     toggleBookmark(annotation.id);
     const btn = popup.querySelector('#popup-bookmark-btn');
     btn?.classList.toggle('active', bookmarkedIds.has(annotation.id));
+  });
+
+  // Delete button - delete annotation (only visible to author)
+  popup.querySelector('#popup-delete-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (confirm('Delete this annotation and all its comments?')) {
+      deleteAnnotation(annotation.id);
+      hideInteractivePopup();
+    }
   });
 
   // Comment button - toggle reply section
@@ -1433,6 +1476,10 @@ function openCommentPanel(annotation: Annotation): void {
 
   const timeAgo = formatTimeAgo(annotation.createdAt);
 
+  // Check if current user is the author
+  const user = getCurrentUser();
+  const isAuthor = user ? annotation.authorId === user.uid : annotation.authorId === 'local-user';
+
   panel.innerHTML = `
     <div class="header">
       <h3>Annotation</h3>
@@ -1459,6 +1506,7 @@ function openCommentPanel(annotation: Annotation): void {
         `).join('')}
         <div class="reaction add-reaction" id="add-reaction-btn">😀+</div>
       </div>
+      ${isAuthor ? '<button class="delete-btn" id="panel-delete-btn">🗑️ Delete Annotation</button>' : ''}
     </div>
     <div class="replies-section">
       ${annotation.replies.map(reply => `
@@ -1489,6 +1537,15 @@ function openCommentPanel(annotation: Annotation): void {
   panel.querySelector('.close-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
     closeCommentPanel();
+  });
+
+  // Delete button (only visible to author)
+  panel.querySelector('#panel-delete-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (confirm('Delete this annotation and all its comments?')) {
+      deleteAnnotation(annotation.id);
+      closeCommentPanel();
+    }
   });
 
   // Reply input
@@ -1995,6 +2052,47 @@ interface BookmarkedAnnotation {
   comment: string;
   authorName: string;
   bookmarkedAt: number;
+}
+
+/**
+ * Delete an annotation (only callable by the author)
+ */
+async function deleteAnnotation(annotationId: string): Promise<void> {
+  const annotation = annotations.find(a => a.id === annotationId);
+  if (!annotation) return;
+
+  // Verify the current user is the author
+  const user = getCurrentUser();
+  const isAuthor = user ? annotation.authorId === user.uid : annotation.authorId === 'local-user';
+
+  if (!isAuthor) {
+    console.warn('[OpenOverlay] Cannot delete: not the author');
+    return;
+  }
+
+  // Remove from local array
+  annotations = annotations.filter(a => a.id !== annotationId);
+
+  // Save to localStorage
+  saveAnnotations();
+
+  // Remove from cloud
+  if (isFirestoreAvailable()) {
+    const pageKey = getPageKey();
+    await deleteAnnotationFromCloud(pageKey, annotationId);
+  }
+
+  // Remove from bookmarks if bookmarked
+  if (bookmarkedIds.has(annotationId)) {
+    bookmarkedIds.delete(annotationId);
+    removeBookmark(annotationId);
+  }
+
+  // Re-apply highlights (this will remove the deleted one)
+  clearHighlights();
+  applyHighlights();
+
+  console.log('[OpenOverlay] Annotation deleted:', annotationId);
 }
 
 function toggleBookmark(annotationId: string): void {
