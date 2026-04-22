@@ -16,6 +16,7 @@ let currentTextStyle: string = 'normal';
 let currentShape: string = 'none'; // 'none' | 'rectangle' | 'circle' | 'line' | 'triangle' | 'star'
 let shapeFilled: boolean = false;
 let isEraser = false;
+let isBackground = false; // Background mode - no collision
 let pendingText: string = '';
 let gameSubMode: 'play' | 'build' = 'build';
 let gameBuildTool: string = 'spawn';
@@ -1006,6 +1007,7 @@ export function initUI(): void {
       <!-- Tools -->
       <div class="toolbar-section">
         <button class="tool-btn" id="oo-eraser" title="Eraser">🧹</button>
+        <button class="tool-btn" id="oo-background" title="Background (no collision)">🖼️</button>
       </div>
 
       <div class="toolbar-divider"></div>
@@ -1266,6 +1268,13 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     dispatchSettingsChange();
   });
 
+  // Background toggle (no collision mode)
+  toolbar.querySelector('#oo-background')?.addEventListener('click', () => {
+    isBackground = !isBackground;
+    toolbar.querySelector('#oo-background')?.classList.toggle('active', isBackground);
+    dispatchSettingsChange();
+  });
+
   // Undo
   toolbar.querySelector('#oo-undo')?.addEventListener('click', () => {
     document.dispatchEvent(new CustomEvent('oo:undo'));
@@ -1507,6 +1516,7 @@ function dispatchSettingsChange(): void {
       brush: getBrush(),
       textStyle: getTextStyle(),
       eraser: isEraser,
+      background: isBackground,
     }
   }));
 }
@@ -1634,6 +1644,10 @@ export function getBrush(): string {
 
 export function getEraser(): boolean {
   return isEraser;
+}
+
+export function getBackground(): boolean {
+  return isBackground;
 }
 
 export function getTextStyle(): string {

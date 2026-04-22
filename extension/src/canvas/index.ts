@@ -3,12 +3,15 @@
  * Handles freehand drawing with multiple brush styles
  */
 
-import { getColor, getSize, getOpacity, getBrush, getEraser, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
+import { getColor, getSize, getOpacity, getBrush, getEraser, getBackground, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
 import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, isFirestoreAvailable, isLoggedIn } from '@/db';
 import { onAuthStateChanged } from '@/auth';
 
 let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
+// Separate canvas for collision detection (excludes background items)
+let collisionCanvas: HTMLCanvasElement | null = null;
+let collisionCtx: CanvasRenderingContext2D | null = null;
 let isDrawing = false;
 let currentMode: 'none' | 'draw' | 'text' = 'none';
 let isGameMode = false;
@@ -24,6 +27,7 @@ interface Stroke {
   opacity: number;
   brush: string;
   eraser: boolean;
+  background?: boolean; // Background strokes don't collide with player
 }
 
 // Text item with element-relative position
@@ -59,6 +63,7 @@ interface ShapeItem {
   width: number;
   opacity: number;
   filled: boolean;
+  background?: boolean; // Background shapes don't collide with player
 }
 
 type DrawItem = Stroke | TextItem | ShapeItem;
@@ -176,6 +181,10 @@ export function initCanvas(): void {
   document.body.appendChild(canvas);
   ctx = canvas.getContext('2d');
 
+  // Create offscreen collision canvas (only collidable items)
+  collisionCanvas = document.createElement('canvas');
+  collisionCtx = collisionCanvas.getContext('2d');
+
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
@@ -268,6 +277,13 @@ function resizeCanvas(): void {
   canvas.width = docWidth * dpr;
   canvas.height = docHeight * dpr;
   ctx.scale(dpr, dpr);
+
+  // Resize collision canvas to match
+  if (collisionCanvas && collisionCtx) {
+    collisionCanvas.width = docWidth * dpr;
+    collisionCanvas.height = docHeight * dpr;
+    collisionCtx.scale(dpr, dpr);
+  }
 
   redraw();
 }
@@ -630,6 +646,7 @@ function onPointerUp(): void {
       width: getSize(),
       opacity: getOpacity(),
       filled: shapeFilled,
+      background: getBackground(),
     });
 
     shapeStart = null;
@@ -668,6 +685,7 @@ function onPointerUp(): void {
       opacity: getOpacity(),
       brush: getBrush(),
       eraser: getEraser(),
+      background: getBackground(),
     });
   }
 
@@ -1103,6 +1121,11 @@ function redraw(): void {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  // Also clear collision canvas
+  if (collisionCanvas && collisionCtx) {
+    collisionCtx.clearRect(0, 0, collisionCanvas.width, collisionCanvas.height);
+  }
+
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
 
@@ -1128,6 +1151,9 @@ function redraw(): void {
       height: domRect.height,
     };
 
+    // Check if this is a background item (no collision)
+    const isBackgroundItem = (item as any).background === true;
+
     if (item.type === 'text') {
       drawTextSaved(item, rect);
       // Draw selection handles if selected (only for own items)
@@ -1136,9 +1162,23 @@ function redraw(): void {
       }
     } else if (item.type === 'shape') {
       drawShapeSaved(item as ShapeItem, rect);
+      // Also draw to collision canvas if not background
+      if (!isBackgroundItem && collisionCtx) {
+        const saveCtx = ctx;
+        ctx = collisionCtx;
+        drawShapeSaved(item as ShapeItem, rect);
+        ctx = saveCtx;
+      }
     } else {
       // Default to stroke (handles old items without type field)
       drawStrokeSaved(item as Stroke, rect);
+      // Also draw to collision canvas if not background
+      if (!isBackgroundItem && collisionCtx) {
+        const saveCtx = ctx;
+        ctx = collisionCtx;
+        drawStrokeSaved(item as Stroke, rect);
+        ctx = saveCtx;
+      }
     }
   };
 
@@ -1490,7 +1530,8 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
   ceiling: boolean;
   ceilingY: number;
 } {
-  if (!canvas || !ctx) {
+  // Use collision canvas which excludes background items
+  if (!collisionCanvas || !collisionCtx) {
     return { floor: false, floorY: 0, ceiling: false, ceilingY: 0 };
   }
 
@@ -1516,10 +1557,10 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
     const scanHeight = Math.floor(20 * dpr);
 
     if (checkStartX >= 0 && scanStartY >= 0 &&
-        checkStartX + checkWidth <= canvas.width &&
-        scanStartY + scanHeight <= canvas.height) {
+        checkStartX + checkWidth <= collisionCanvas.width &&
+        scanStartY + scanHeight <= collisionCanvas.height) {
 
-      const footData = ctx.getImageData(checkStartX, scanStartY, checkWidth, scanHeight);
+      const footData = collisionCtx.getImageData(checkStartX, scanStartY, checkWidth, scanHeight);
 
       // Find the first row with solid pixels (top of surface)
       for (let row = 0; row < scanHeight; row++) {
@@ -1552,10 +1593,10 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
     const ceilScanHeight = Math.floor(15 * dpr);
 
     if (checkStartX >= 0 && ceilScanStart >= 0 &&
-        checkStartX + checkWidth <= canvas.width &&
-        ceilScanStart + ceilScanHeight <= canvas.height) {
+        checkStartX + checkWidth <= collisionCanvas.width &&
+        ceilScanStart + ceilScanHeight <= collisionCanvas.height) {
 
-      const headData = ctx.getImageData(checkStartX, ceilScanStart, checkWidth, ceilScanHeight);
+      const headData = collisionCtx.getImageData(checkStartX, ceilScanStart, checkWidth, ceilScanHeight);
 
       // Find the lowest row with solid pixels (bottom of ceiling)
       for (let row = ceilScanHeight - 1; row >= 0; row--) {
