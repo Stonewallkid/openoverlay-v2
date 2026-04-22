@@ -889,6 +889,7 @@ export function initUI(): void {
       </div>
 
       <div class="toolbar-divider"></div>
+
     </div>
 
     <!-- SHARED CONTROLS -->
@@ -1002,13 +1003,24 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       toolbar.querySelectorAll('.quick-color').forEach(s => s.classList.remove('active'));
       swatch.classList.add('active');
       dispatchSettingsChange();
+
+      // Also update Nib color in game mode
+      if (currentMode === 'game') {
+        document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color } }));
+      }
     });
   });
 
   // Color picker
   toolbar.querySelector('#oo-color')?.addEventListener('input', () => {
+    const colorInput = toolbar.querySelector('#oo-color') as HTMLInputElement;
     toolbar.querySelectorAll('.quick-color').forEach(s => s.classList.remove('active'));
     dispatchSettingsChange();
+
+    // Also update Nib color in game mode
+    if (currentMode === 'game' && colorInput) {
+      document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color: colorInput.value } }));
+    }
   });
 
   // Size slider

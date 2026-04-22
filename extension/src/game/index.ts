@@ -46,6 +46,17 @@ let player: Player = {
 let wasOnGround = false;
 let landingSlideFrames = 0;
 
+// Idle wave animation
+let lastMoveTime = 0;
+let isWaving = false;
+let waveFrame = 0;
+let waveStartTime = 0;
+const IDLE_WAVE_DELAY = 120000; // Start waving after 2 minutes of no movement
+const WAVE_DURATION = 2000; // Wave for 2 seconds
+
+// Player color
+let playerColor = localStorage.getItem('oo_player_color') || '#ffffff';
+
 // Course elements
 interface Checkpoint {
   id: string;
@@ -188,6 +199,13 @@ export function initGame(): void {
       render();
     }
   });
+
+  // Listen for player color changes
+  document.addEventListener('oo:playercolor', ((e: CustomEvent) => {
+    playerColor = e.detail.color;
+    localStorage.setItem('oo_player_color', playerColor);
+    render(); // Re-render to show new color
+  }) as EventListener);
 
   // Mouse events for building
   gameCanvas.addEventListener('pointerdown', onPointerDown);
@@ -498,9 +516,13 @@ function update(dt: number): void {
   if (keys['ArrowLeft'] || keys['KeyA']) {
     player.vx = -currentMoveSpeed;
     player.facingRight = false;
+    lastMoveTime = performance.now();
+    isWaving = false;
   } else if (keys['ArrowRight'] || keys['KeyD']) {
     player.vx = currentMoveSpeed;
     player.facingRight = true;
+    lastMoveTime = performance.now();
+    isWaving = false;
   } else {
     // Use slower friction during landing slide, faster otherwise
     const friction = landingSlideFrames > 0 ? 0.92 : FRICTION;
@@ -510,6 +532,30 @@ function update(dt: number): void {
 
   // Decrease landing slide frames
   if (landingSlideFrames > 0) landingSlideFrames--;
+
+  // Check for idle wave animation
+  if (player.onGround && Math.abs(player.vx) < 0.1) {
+    const idleTime = performance.now() - lastMoveTime;
+    if (idleTime > IDLE_WAVE_DELAY && !isWaving) {
+      // Start waving
+      isWaving = true;
+      waveStartTime = performance.now();
+      waveFrame = 0;
+    }
+    if (isWaving) {
+      // Wave for limited duration
+      if (performance.now() - waveStartTime < WAVE_DURATION) {
+        waveFrame += 0.15;
+      } else {
+        // Done waving, reset timer so it doesn't wave again immediately
+        isWaving = false;
+        lastMoveTime = performance.now();
+      }
+    }
+  } else {
+    isWaving = false;
+    waveFrame = 0;
+  }
 
   // Double jump logic - only trigger on key press, not hold
   const jumpKeyPressed = keys['ArrowUp'] || keys['KeyW'] || keys['Space'];
@@ -1074,7 +1120,7 @@ function drawPlayer(): void {
   const bodyStartY = headY + headRadius;
   const bodyEndY = bodyStartY + bodyLength;
 
-  gameCtx.strokeStyle = '#fff';
+  gameCtx.strokeStyle = playerColor;
   gameCtx.lineWidth = 3;
   gameCtx.lineCap = 'round';
   gameCtx.lineJoin = 'round';
@@ -1090,8 +1136,23 @@ function drawPlayer(): void {
   gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
   gameCtx.stroke();
 
+  // Marker tip hairstyle - chisel/wedge shape like a real marker nib
+  gameCtx.fillStyle = playerColor;
+  gameCtx.beginPath();
+  // Wide base on left side of head
+  gameCtx.moveTo(centerX - 8, headY - headRadius + 1);
+  // Flat top edge going right and slightly up
+  gameCtx.lineTo(centerX - 4, headY - headRadius - 5);
+  // Angled chisel edge sloping down to a point on the right
+  gameCtx.lineTo(centerX + 10, headY - headRadius + 4);
+  // Back along the head curve
+  gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 8, headY - headRadius + 1);
+  gameCtx.closePath();
+  gameCtx.fill();
+  gameCtx.stroke();
+
   // Eyes
-  gameCtx.fillStyle = '#fff';
+  gameCtx.fillStyle = playerColor;
   gameCtx.beginPath();
   gameCtx.arc(centerX + 3, headY - 1, 2, 0, Math.PI * 2);
   gameCtx.fill();
@@ -1107,15 +1168,26 @@ function drawPlayer(): void {
   const armSwing = walkCycle * 0.5;
   const legSwing = walkCycle * 0.6;
 
-  // Arms
+  // Wave animation for idle
+  const waveAngle = isWaving ? Math.sin(waveFrame * 3) * 0.5 : 0;
+
+  // Left arm (waves when idle)
   gameCtx.beginPath();
   gameCtx.moveTo(centerX, bodyStartY + 4);
-  gameCtx.lineTo(
-    centerX - limbLength * Math.cos(0.6 + armSwing),
-    bodyStartY + 4 + limbLength * Math.sin(0.6 + armSwing)
-  );
+  if (isWaving) {
+    // Waving arm - raised up and waving
+    const waveX = centerX - limbLength * Math.cos(-0.8 + waveAngle);
+    const waveY = bodyStartY + 4 + limbLength * Math.sin(-0.8 + waveAngle);
+    gameCtx.lineTo(waveX, waveY);
+  } else {
+    gameCtx.lineTo(
+      centerX - limbLength * Math.cos(0.6 + armSwing),
+      bodyStartY + 4 + limbLength * Math.sin(0.6 + armSwing)
+    );
+  }
   gameCtx.stroke();
 
+  // Right arm
   gameCtx.beginPath();
   gameCtx.moveTo(centerX, bodyStartY + 4);
   gameCtx.lineTo(
@@ -1798,4 +1870,13 @@ export function undoLastElement(): void {
 
 export function setBuildTool(tool: string): void {
   buildTool = tool as any;
+}
+
+export function setPlayerColor(color: string): void {
+  playerColor = color;
+  localStorage.setItem('oo_player_color', color);
+}
+
+export function getPlayerColor(): string {
+  return playerColor;
 }
