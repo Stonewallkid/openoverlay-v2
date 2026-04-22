@@ -17,10 +17,12 @@ import {
   orderBy,
   limit,
   getDocs,
+  onSnapshot,
   serverTimestamp,
   increment,
   Firestore,
-  Timestamp
+  Timestamp,
+  Unsubscribe
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { firebaseConfig } from '@/firebase/config';
@@ -484,4 +486,183 @@ export function isFirestoreAvailable(): boolean {
  */
 export function isLoggedIn(): boolean {
   return getCurrentUser() !== null;
+}
+
+// ============ REAL-TIME ANNOTATIONS ============
+
+export interface CloudAnnotation {
+  id: string;
+  pageKey: string;
+  text: string;
+  anchorSelector: string;
+  anchorOffset: number;
+  focusSelector: string;
+  focusOffset: number;
+  comment: string;
+  color: string;
+  authorId: string;
+  authorName: string;
+  createdAt: number;
+  reactions: { emoji: string; count: number; users: string[] }[];
+  replies: { authorId: string; authorName: string; text: string; createdAt: number }[];
+}
+
+let annotationUnsubscribe: Unsubscribe | null = null;
+
+/**
+ * Save or update an annotation to cloud
+ */
+export async function saveAnnotationToCloud(pageKey: string, annotation: CloudAnnotation): Promise<boolean> {
+  if (!db) return false;
+
+  try {
+    const annotationRef = doc(db, 'pageAnnotations', pageKey, 'annotations', annotation.id);
+    await setDoc(annotationRef, {
+      ...annotation,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+    console.log('[OpenOverlay] Annotation saved to cloud');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to save annotation:', err);
+    return false;
+  }
+}
+
+/**
+ * Delete an annotation from cloud
+ */
+export async function deleteAnnotationFromCloud(pageKey: string, annotationId: string): Promise<boolean> {
+  if (!db) return false;
+
+  try {
+    const annotationRef = doc(db, 'pageAnnotations', pageKey, 'annotations', annotationId);
+    await deleteDoc(annotationRef);
+    console.log('[OpenOverlay] Annotation deleted from cloud');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to delete annotation:', err);
+    return false;
+  }
+}
+
+/**
+ * Subscribe to real-time annotation updates for a page
+ */
+export function subscribeToAnnotations(
+  pageKey: string,
+  callback: (annotations: CloudAnnotation[]) => void
+): Unsubscribe | null {
+  if (!db) return null;
+
+  // Unsubscribe from previous page if any
+  if (annotationUnsubscribe) {
+    annotationUnsubscribe();
+  }
+
+  const annotationsRef = collection(db, 'pageAnnotations', pageKey, 'annotations');
+  const q = query(annotationsRef, orderBy('createdAt', 'desc'));
+
+  annotationUnsubscribe = onSnapshot(q, (snapshot) => {
+    const annotations: CloudAnnotation[] = [];
+    snapshot.forEach((docSnap) => {
+      annotations.push({
+        id: docSnap.id,
+        ...docSnap.data()
+      } as CloudAnnotation);
+    });
+    console.log('[OpenOverlay] Real-time update:', annotations.length, 'annotations');
+    callback(annotations);
+  }, (error) => {
+    console.error('[OpenOverlay] Annotation subscription error:', error);
+  });
+
+  return annotationUnsubscribe;
+}
+
+/**
+ * Unsubscribe from annotation updates
+ */
+export function unsubscribeFromAnnotations(): void {
+  if (annotationUnsubscribe) {
+    annotationUnsubscribe();
+    annotationUnsubscribe = null;
+  }
+}
+
+/**
+ * Add a reply to an annotation
+ */
+export async function addReplyToAnnotation(
+  pageKey: string,
+  annotationId: string,
+  reply: { authorId: string; authorName: string; text: string; createdAt: number }
+): Promise<boolean> {
+  if (!db) return false;
+
+  try {
+    const annotationRef = doc(db, 'pageAnnotations', pageKey, 'annotations', annotationId);
+    const annotationSnap = await getDoc(annotationRef);
+
+    if (!annotationSnap.exists()) return false;
+
+    const data = annotationSnap.data();
+    const replies = data.replies || [];
+    replies.push(reply);
+
+    await updateDoc(annotationRef, { replies });
+    console.log('[OpenOverlay] Reply added');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to add reply:', err);
+    return false;
+  }
+}
+
+/**
+ * Toggle a reaction on an annotation
+ */
+export async function toggleReactionOnAnnotation(
+  pageKey: string,
+  annotationId: string,
+  emoji: string,
+  userId: string
+): Promise<boolean> {
+  if (!db) return false;
+
+  try {
+    const annotationRef = doc(db, 'pageAnnotations', pageKey, 'annotations', annotationId);
+    const annotationSnap = await getDoc(annotationRef);
+
+    if (!annotationSnap.exists()) return false;
+
+    const data = annotationSnap.data();
+    let reactions = data.reactions || [];
+
+    const existingReaction = reactions.find((r: any) => r.emoji === emoji);
+
+    if (existingReaction) {
+      if (existingReaction.users.includes(userId)) {
+        // Remove user's reaction
+        existingReaction.users = existingReaction.users.filter((u: string) => u !== userId);
+        existingReaction.count = existingReaction.users.length;
+        if (existingReaction.count === 0) {
+          reactions = reactions.filter((r: any) => r.emoji !== emoji);
+        }
+      } else {
+        // Add user's reaction
+        existingReaction.users.push(userId);
+        existingReaction.count = existingReaction.users.length;
+      }
+    } else {
+      // New reaction
+      reactions.push({ emoji, count: 1, users: [userId] });
+    }
+
+    await updateDoc(annotationRef, { reactions });
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to toggle reaction:', err);
+    return false;
+  }
 }

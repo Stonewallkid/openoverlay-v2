@@ -1,7 +1,18 @@
 /**
  * Annotations Module
- * Text highlighting and commenting system
+ * Text highlighting and commenting system with real-time sync
  */
+
+import {
+  saveAnnotationToCloud,
+  deleteAnnotationFromCloud,
+  subscribeToAnnotations,
+  addReplyToAnnotation,
+  toggleReactionOnAnnotation,
+  type CloudAnnotation,
+  isFirestoreAvailable
+} from '@/db';
+import { getCurrentUser } from '@/auth';
 
 interface Annotation {
   id: string;
@@ -28,6 +39,7 @@ let annotations: Annotation[] = [];
 let activePopup: HTMLElement | null = null;
 let annotationHost: HTMLElement | null = null;
 let annotationRoot: ShadowRoot | null = null;
+let currentCommentAnnotation: Annotation | null = null;
 
 // Bookmarked annotation IDs (across all pages)
 let bookmarkedIds: Set<string> = new Set();
@@ -788,6 +800,9 @@ function showAnnotationForm(rect: DOMRect, selection: Selection): void {
     saveAnnotations();
     applyHighlights();
 
+    // Sync to cloud for real-time updates
+    saveAnnotationToCloudAsync(annotation);
+
     form.remove();
     window.getSelection()?.removeAllRanges();
 
@@ -840,10 +855,9 @@ function generateId(): string {
 }
 
 /**
- * Apply highlight styles to annotated text
+ * Clear all existing highlights
  */
-function applyHighlights(): void {
-  // Remove existing highlights
+function clearHighlights(): void {
   document.querySelectorAll('.oo-highlight').forEach(el => {
     const parent = el.parentNode;
     if (parent) {
@@ -851,6 +865,14 @@ function applyHighlights(): void {
       parent.normalize();
     }
   });
+}
+
+/**
+ * Apply highlight styles to annotated text
+ */
+function applyHighlights(): void {
+  // Remove existing highlights
+  clearHighlights();
 
   // Apply new highlights
   for (const annotation of annotations) {
@@ -1060,6 +1082,7 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
           reaction.userReacted = true;
         }
         saveAnnotations();
+        syncReactionToCloud(annotation, emoji);
         // Refresh popup
         hideInteractivePopup();
         showInteractivePopup(annotation, e as MouseEvent);
@@ -1091,6 +1114,7 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
         annotation.reactions.push({ emoji, count: 1, userReacted: true });
       }
       saveAnnotations();
+      syncReactionToCloud(annotation, emoji);
       hideInteractivePopup();
       showInteractivePopup(annotation, e as MouseEvent);
     });
@@ -1104,13 +1128,16 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
     const text = replyInput.value.trim();
     if (!text) return;
 
-    annotation.replies.push({
-      authorName: 'You',
+    const user = getCurrentUser();
+    const reply = {
+      authorName: user?.displayName || 'You',
       text,
       createdAt: Date.now(),
-    });
+    };
 
+    annotation.replies.push(reply);
     saveAnnotations();
+    syncReplyToCloud(annotation, reply);
     replyInput.value = '';
 
     // Update comment count
@@ -1175,6 +1202,7 @@ function setupPopupReactions(popup: HTMLElement, annotation: Annotation): void {
           reaction.userReacted = true;
         }
         saveAnnotations();
+        syncReactionToCloud(annotation, emoji);
         refreshPopupReactions(popup, annotation);
       }
     });
@@ -1228,6 +1256,7 @@ function showPopupEmojiPicker(popup: HTMLElement, annotation: Annotation, contai
       }
 
       saveAnnotations();
+      syncReactionToCloud(annotation, emoji);
       refreshPopupReactions(popup, annotation);
       hidePopupEmojiPicker();
     });
@@ -1354,13 +1383,17 @@ function openCommentPanel(annotation: Annotation): void {
     const text = replyInput.value.trim();
     if (!text) return;
 
-    annotation.replies.push({
-      authorName: 'You',
+    const user = getCurrentUser();
+    const authorName = user?.displayName || 'You';
+    const reply = {
+      authorName,
       text,
       createdAt: Date.now(),
-    });
+    };
 
+    annotation.replies.push(reply);
     saveAnnotations();
+    syncReplyToCloud(annotation, reply);
 
     // Refresh the replies section without reopening
     const repliesSection = panel.querySelector('.replies-section');
@@ -1368,9 +1401,9 @@ function openCommentPanel(annotation: Annotation): void {
       const replyHtml = `
         <div class="reply">
           <div class="author-info">
-            <div class="avatar">Y</div>
+            <div class="avatar">${authorName.charAt(0).toUpperCase()}</div>
             <div>
-              <div class="author-name">You</div>
+              <div class="author-name">${escapeHtml(authorName)}</div>
               <div class="timestamp">just now</div>
             </div>
           </div>
@@ -1419,6 +1452,7 @@ function openCommentPanel(annotation: Annotation): void {
           reaction.userReacted = true;
         }
         saveAnnotations();
+        syncReactionToCloud(annotation, emoji);
         refreshReactions(annotation, reactionsContainer as HTMLElement);
       }
     });
@@ -1481,6 +1515,7 @@ function showEmojiPicker(annotation: Annotation, triggerBtn: HTMLElement, contai
       }
 
       saveAnnotations();
+      syncReactionToCloud(annotation, emoji);
       refreshReactions(annotation, container);
       hideEmojiPicker();
     });
@@ -1544,6 +1579,7 @@ function refreshReactions(annotation: Annotation, container: HTMLElement): void 
           reaction.userReacted = true;
         }
         saveAnnotations();
+        syncReactionToCloud(annotation, emoji);
         refreshReactions(annotation, container);
       }
     });
@@ -1589,7 +1625,75 @@ function formatTimeAgo(timestamp: number): string {
 function saveAnnotations(): void {
   const pageKey = getPageKey();
   localStorage.setItem(`oo_annotations_${pageKey}`, JSON.stringify(annotations));
-  console.log('[OpenOverlay] Saved', annotations.length, 'annotations');
+  console.log('[OpenOverlay] Saved', annotations.length, 'annotations locally');
+}
+
+/**
+ * Save a single annotation to cloud (for real-time sync)
+ */
+async function saveAnnotationToCloudAsync(annotation: Annotation): Promise<void> {
+  if (!isFirestoreAvailable()) return;
+
+  const user = getCurrentUser();
+  const pageKey = getPageKey();
+
+  const cloudAnnotation: CloudAnnotation = {
+    id: annotation.id,
+    pageKey,
+    text: annotation.text,
+    anchorSelector: annotation.anchorSelector,
+    anchorOffset: annotation.anchorOffset,
+    focusSelector: annotation.focusSelector,
+    focusOffset: annotation.focusOffset,
+    comment: annotation.comment,
+    color: annotation.color,
+    authorId: user?.uid || annotation.authorId,
+    authorName: user?.displayName || annotation.authorName,
+    createdAt: annotation.createdAt,
+    reactions: annotation.reactions.map(r => ({
+      emoji: r.emoji,
+      count: r.count,
+      users: r.userReacted && user ? [user.uid] : []
+    })),
+    replies: annotation.replies.map(r => ({
+      authorId: '',
+      authorName: r.authorName,
+      text: r.text,
+      createdAt: r.createdAt
+    }))
+  };
+
+  await saveAnnotationToCloud(pageKey, cloudAnnotation);
+}
+
+/**
+ * Sync reaction toggle to cloud
+ */
+async function syncReactionToCloud(annotation: Annotation, emoji: string): Promise<void> {
+  if (!isFirestoreAvailable()) return;
+
+  const user = getCurrentUser();
+  if (!user) return;
+
+  const pageKey = getPageKey();
+  await toggleReactionOnAnnotation(pageKey, annotation.id, emoji, user.uid);
+}
+
+/**
+ * Sync a reply to cloud
+ */
+async function syncReplyToCloud(annotation: Annotation, reply: { authorName: string; text: string; createdAt: number }): Promise<void> {
+  if (!isFirestoreAvailable()) return;
+
+  const user = getCurrentUser();
+  const pageKey = getPageKey();
+
+  await addReplyToAnnotation(pageKey, annotation.id, {
+    authorId: user?.uid || '',
+    authorName: user?.displayName || reply.authorName,
+    text: reply.text,
+    createdAt: reply.createdAt
+  });
 }
 
 function loadAnnotations(): void {
@@ -1599,12 +1703,130 @@ function loadAnnotations(): void {
   if (data) {
     try {
       annotations = JSON.parse(data);
-      console.log('[OpenOverlay] Loaded', annotations.length, 'annotations');
+      console.log('[OpenOverlay] Loaded', annotations.length, 'annotations from localStorage');
     } catch (e) {
       console.warn('[OpenOverlay] Failed to load annotations');
       annotations = [];
     }
   }
+
+  // Set up real-time sync if Firestore is available
+  setupRealtimeSync();
+}
+
+/**
+ * Set up real-time annotation sync
+ */
+function setupRealtimeSync(): void {
+  if (!isFirestoreAvailable()) {
+    console.log('[OpenOverlay] Firestore not available, skipping real-time sync');
+    return;
+  }
+
+  const pageKey = getPageKey();
+  const user = getCurrentUser();
+
+  subscribeToAnnotations(pageKey, (cloudAnnotations) => {
+    // Merge cloud annotations with local ones
+    const merged = new Map<string, Annotation>();
+
+    // Add local annotations first
+    for (const ann of annotations) {
+      merged.set(ann.id, ann);
+    }
+
+    // Update/add cloud annotations
+    for (const cloudAnn of cloudAnnotations) {
+      const localAnn = merged.get(cloudAnn.id);
+
+      // Convert cloud annotation to local format
+      const converted: Annotation = {
+        id: cloudAnn.id,
+        text: cloudAnn.text,
+        anchorSelector: cloudAnn.anchorSelector,
+        anchorOffset: cloudAnn.anchorOffset,
+        focusSelector: cloudAnn.focusSelector,
+        focusOffset: cloudAnn.focusOffset,
+        comment: cloudAnn.comment,
+        color: cloudAnn.color,
+        authorId: cloudAnn.authorId,
+        authorName: cloudAnn.authorName,
+        createdAt: cloudAnn.createdAt,
+        reactions: cloudAnn.reactions.map(r => ({
+          emoji: r.emoji,
+          count: r.count,
+          userReacted: user ? r.users.includes(user.uid) : false
+        })),
+        replies: cloudAnn.replies.map(r => ({
+          authorName: r.authorName,
+          text: r.text,
+          createdAt: r.createdAt
+        }))
+      };
+
+      // Cloud version is newer or doesn't exist locally
+      if (!localAnn || cloudAnn.createdAt >= localAnn.createdAt) {
+        merged.set(cloudAnn.id, converted);
+      }
+    }
+
+    // Update annotations array
+    annotations = Array.from(merged.values());
+
+    // Save merged state to localStorage
+    const pageKey = getPageKey();
+    localStorage.setItem(`oo_annotations_${pageKey}`, JSON.stringify(annotations));
+
+    // Re-apply highlights to show new annotations
+    clearHighlights();
+    applyHighlights();
+
+    // Update any open popup/panel
+    refreshOpenUI();
+  });
+}
+
+/**
+ * Refresh any open popup or comment panel with latest data
+ */
+function refreshOpenUI(): void {
+  // If a popup is open, refresh it
+  if (currentPopupAnnotation) {
+    const updated = annotations.find(a => a.id === currentPopupAnnotation?.id);
+    if (updated) {
+      currentPopupAnnotation = updated;
+      // The popup will update on next interaction
+    }
+  }
+
+  // If comment panel is open, refresh it
+  if (commentPanel && currentCommentAnnotation) {
+    const updated = annotations.find(a => a.id === currentCommentAnnotation?.id);
+    if (updated) {
+      refreshCommentPanel(updated);
+    }
+  }
+}
+
+/**
+ * Refresh the comment panel with updated annotation data
+ */
+function refreshCommentPanel(annotation: Annotation): void {
+  if (!commentPanel || !annotationRoot) return;
+
+  const repliesContainer = commentPanel.querySelector('.replies-container');
+  if (!repliesContainer) return;
+
+  // Update replies list
+  repliesContainer.innerHTML = annotation.replies.map(reply => `
+    <div class="reply">
+      <div class="reply-author">${escapeHtml(reply.authorName)}</div>
+      <div class="reply-text">${escapeHtml(reply.text)}</div>
+      <div class="reply-time">${formatTimeAgo(reply.createdAt)}</div>
+    </div>
+  `).join('') || '<div class="no-replies">No comments yet. Be the first!</div>';
+
+  currentCommentAnnotation = annotation;
 }
 
 // ============ BOOKMARKS ============
