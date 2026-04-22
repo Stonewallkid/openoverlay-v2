@@ -19,6 +19,8 @@ interface Annotation {
   id: string;
   // Text selection info
   text: string;
+  contextBefore: string;  // Text before selection for unique matching
+  contextAfter: string;   // Text after selection for unique matching
   anchorSelector: string;
   anchorOffset: number;
   focusSelector: string;
@@ -780,10 +782,15 @@ function showAnnotationForm(rect: DOMRect, selection: Selection): void {
       return;
     }
 
+    // Get surrounding context for unique matching
+    const { contextBefore, contextAfter } = getSelectionContext(range, text);
+
     // Create annotation
     const annotation: Annotation = {
       id: generateId(),
       text,
+      contextBefore,
+      contextAfter,
       anchorSelector: getNodeSelector(anchorNode),
       anchorOffset: selection.anchorOffset,
       focusSelector: getNodeSelector(focusNode),
@@ -856,6 +863,55 @@ function generateId(): string {
 }
 
 /**
+ * Get surrounding text context for a selection to enable unique matching
+ */
+function getSelectionContext(range: Range, selectedText: string): { contextBefore: string; contextAfter: string } {
+  const CONTEXT_LENGTH = 30;
+
+  try {
+    // Get the common ancestor container
+    const container = range.commonAncestorContainer;
+    const parentEl = container.nodeType === Node.TEXT_NODE ? container.parentElement : container as Element;
+
+    if (!parentEl) {
+      return { contextBefore: '', contextAfter: '' };
+    }
+
+    // Get all text content of the parent element
+    const fullText = parentEl.textContent || '';
+
+    // Find where our selected text appears in the parent's full text
+    // We need to find the right occurrence based on the range position
+    const textBeforeRange = range.startContainer.textContent?.substring(0, range.startOffset) || '';
+
+    // Walk backwards to accumulate text before the selection
+    let beforeText = '';
+    const walker = document.createTreeWalker(parentEl, NodeFilter.SHOW_TEXT, null);
+    let node: Node | null;
+
+    while ((node = walker.nextNode())) {
+      if (node === range.startContainer) {
+        beforeText += textBeforeRange;
+        break;
+      }
+      beforeText += node.textContent || '';
+    }
+
+    // Get context before (last N chars before selection)
+    const contextBefore = beforeText.slice(-CONTEXT_LENGTH);
+
+    // Get context after (first N chars after selection)
+    const afterStartIndex = beforeText.length + selectedText.length;
+    const contextAfter = fullText.substring(afterStartIndex, afterStartIndex + CONTEXT_LENGTH);
+
+    return { contextBefore, contextAfter };
+  } catch (e) {
+    console.warn('[OpenOverlay] Failed to get selection context:', e);
+    return { contextBefore: '', contextAfter: '' };
+  }
+}
+
+/**
  * Clear all existing highlights
  */
 function clearHighlights(): void {
@@ -886,68 +942,72 @@ function applyHighlights(): void {
 }
 
 function highlightAnnotation(annotation: Annotation): void {
-  // Try to find the exact location using stored selector first
-  let targetNode: Node | null = null;
-  let startOffset = 0;
+  // Build a search pattern using context
+  const searchPattern = (annotation.contextBefore || '') + annotation.text + (annotation.contextAfter || '');
+  const textToFind = annotation.text;
 
-  try {
-    // Try to find the anchor element using the stored selector
-    const anchorElement = document.querySelector(annotation.anchorSelector);
-    if (anchorElement) {
-      // Find the text node within this element that contains our text
-      const walker = document.createTreeWalker(
-        anchorElement,
-        NodeFilter.SHOW_TEXT,
-        null
-      );
+  // Collect all text content with node references
+  const textNodes: { node: Node; start: number; end: number }[] = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
 
-      let node: Node | null;
-      let charCount = 0;
+  let fullText = '';
+  let node: Node | null;
 
-      while ((node = walker.nextNode())) {
-        const nodeLength = node.textContent?.length || 0;
-
-        // Check if the anchor offset falls within this text node
-        if (charCount + nodeLength >= annotation.anchorOffset) {
-          // Found the right text node, now find the text within it
-          const textContent = node.textContent || '';
-          const localOffset = annotation.anchorOffset - charCount;
-
-          // Verify the text matches at this position
-          if (textContent.substring(localOffset).startsWith(annotation.text) ||
-              textContent.includes(annotation.text)) {
-            targetNode = node;
-            // Find exact position of the text in this node
-            const idx = textContent.indexOf(annotation.text);
-            startOffset = idx !== -1 ? idx : localOffset;
-            break;
-          }
-        }
-        charCount += nodeLength;
-      }
-    }
-  } catch (e) {
-    // Selector might be invalid, fall back to text search
+  while ((node = walker.nextNode())) {
+    const content = node.textContent || '';
+    textNodes.push({
+      node,
+      start: fullText.length,
+      end: fullText.length + content.length
+    });
+    fullText += content;
   }
 
-  // Fall back to searching by text if selector approach failed
-  if (!targetNode) {
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      null
-    );
+  // Find the best match using context
+  let bestMatchIndex = -1;
 
-    let node: Node | null;
-    while ((node = walker.nextNode())) {
-      const textContent = node.textContent || '';
-      const index = textContent.indexOf(annotation.text);
+  if (annotation.contextBefore || annotation.contextAfter) {
+    // Search for text with context
+    const contextBefore = annotation.contextBefore || '';
+    const contextAfter = annotation.contextAfter || '';
 
-      if (index !== -1) {
-        targetNode = node;
-        startOffset = index;
+    // Try to find the full pattern (context + text + context)
+    let searchIndex = 0;
+    while (searchIndex < fullText.length) {
+      const idx = fullText.indexOf(textToFind, searchIndex);
+      if (idx === -1) break;
+
+      // Check if context matches
+      const beforeMatch = contextBefore === '' ||
+        fullText.substring(Math.max(0, idx - contextBefore.length), idx).endsWith(contextBefore);
+      const afterMatch = contextAfter === '' ||
+        fullText.substring(idx + textToFind.length, idx + textToFind.length + contextAfter.length).startsWith(contextAfter);
+
+      if (beforeMatch && afterMatch) {
+        bestMatchIndex = idx;
         break;
       }
+
+      searchIndex = idx + 1;
+    }
+  }
+
+  // Fall back to first occurrence if context matching failed
+  if (bestMatchIndex === -1) {
+    bestMatchIndex = fullText.indexOf(textToFind);
+  }
+
+  if (bestMatchIndex === -1) return;
+
+  // Find which text node contains the match
+  let targetNode: Node | null = null;
+  let nodeOffset = 0;
+
+  for (const tn of textNodes) {
+    if (bestMatchIndex >= tn.start && bestMatchIndex < tn.end) {
+      targetNode = tn.node;
+      nodeOffset = bestMatchIndex - tn.start;
+      break;
     }
   }
 
@@ -956,8 +1016,8 @@ function highlightAnnotation(annotation: Annotation): void {
   // Create the highlight
   try {
     const range = document.createRange();
-    range.setStart(targetNode, startOffset);
-    range.setEnd(targetNode, startOffset + annotation.text.length);
+    range.setStart(targetNode, nodeOffset);
+    range.setEnd(targetNode, nodeOffset + textToFind.length);
 
     const highlight = document.createElement('span');
     highlight.className = 'oo-highlight';
@@ -977,7 +1037,6 @@ function highlightAnnotation(annotation: Annotation): void {
 
     highlight.addEventListener('mouseleave', (e) => {
       highlight.style.background = `${annotation.color}40`;
-      // Delay hiding to allow mouse to move to popup
       schedulePopupHide();
     });
 
@@ -1704,6 +1763,8 @@ async function saveAnnotationToCloudAsync(annotation: Annotation): Promise<void>
     id: annotation.id,
     pageKey,
     text: annotation.text,
+    contextBefore: annotation.contextBefore || '',
+    contextAfter: annotation.contextAfter || '',
     anchorSelector: annotation.anchorSelector,
     anchorOffset: annotation.anchorOffset,
     focusSelector: annotation.focusSelector,
@@ -1830,6 +1891,8 @@ function handleCloudAnnotations(cloudAnnotations: CloudAnnotation[]): void {
     const converted: Annotation = {
       id: cloudAnn.id,
       text: cloudAnn.text,
+      contextBefore: cloudAnn.contextBefore || '',
+      contextAfter: cloudAnn.contextAfter || '',
       anchorSelector: cloudAnn.anchorSelector,
       anchorOffset: cloudAnn.anchorOffset,
       focusSelector: cloudAnn.focusSelector,

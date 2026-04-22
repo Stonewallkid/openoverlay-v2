@@ -494,6 +494,8 @@ export interface CloudAnnotation {
   id: string;
   pageKey: string;
   text: string;
+  contextBefore?: string;
+  contextAfter?: string;
   anchorSelector: string;
   anchorOffset: number;
   focusSelector: string;
