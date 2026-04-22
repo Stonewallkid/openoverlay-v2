@@ -775,6 +775,28 @@ function update(dt: number): void {
   player.x += player.vx * dt;
   player.y += player.vy * dt;
 
+  // Clamp player to canvas bounds
+  if (gameCanvas) {
+    const minX = 0;
+    const maxX = gameCanvas.width - player.width;
+    const minY = 0;
+    const maxY = gameCanvas.height - player.height;
+
+    if (player.x < minX) {
+      player.x = minX;
+      player.vx = 0;
+    }
+    if (player.x > maxX) {
+      player.x = maxX;
+      player.vx = 0;
+    }
+    if (player.y < minY) {
+      player.y = minY;
+      player.vy = 0;
+    }
+    // Don't clamp Y at bottom - let player fall to death
+  }
+
   // --- PIXEL-PERFECT COLLISION DETECTION ---
 
   // Check collision at player position
