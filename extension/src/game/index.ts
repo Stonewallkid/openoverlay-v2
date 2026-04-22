@@ -56,6 +56,12 @@ const WAVE_DURATION = 2000; // Wave for 2 seconds
 
 // Player color
 let playerColor = localStorage.getItem('oo_player_color') || '#ffffff';
+let playerHat = localStorage.getItem('oo_player_hat') || 'none';
+let playerAccessory = localStorage.getItem('oo_player_accessory') || 'none';
+
+// Available customization options
+const HATS = ['none', 'cap', 'tophat', 'crown', 'beanie', 'party'];
+const ACCESSORIES = ['none', 'glasses', 'sunglasses', 'mustache', 'beard', 'mask'];
 
 // Girl mode (longer hair + dress)
 let isGirlMode = localStorage.getItem('oo_player_girl') === 'true';
@@ -225,6 +231,20 @@ export function initGame(): void {
   // Listen for player style changes (girl mode)
   document.addEventListener('oo:playerstyle', ((e: CustomEvent) => {
     isGirlMode = e.detail.isGirl;
+    render();
+  }) as EventListener);
+
+  // Listen for hat changes
+  document.addEventListener('oo:playerhat', ((e: CustomEvent) => {
+    playerHat = e.detail.hat;
+    localStorage.setItem('oo_player_hat', playerHat);
+    render();
+  }) as EventListener);
+
+  // Listen for accessory changes
+  document.addEventListener('oo:playeraccessory', ((e: CustomEvent) => {
+    playerAccessory = e.detail.accessory;
+    localStorage.setItem('oo_player_accessory', playerAccessory);
     render();
   }) as EventListener);
 
@@ -1540,7 +1560,177 @@ function drawPlayer(): void {
     gameCtx.stroke();
   }
 
+  // Draw accessories on top
+  drawAccessories(centerX, headY, headRadius);
+
   gameCtx.restore();
+}
+
+function drawAccessories(centerX: number, headY: number, headRadius: number): void {
+  if (!gameCtx) return;
+
+  // Reset shadow for accessories
+  gameCtx.shadowBlur = 0;
+
+  // Draw hat
+  if (playerHat !== 'none') {
+    drawHat(centerX, headY, headRadius);
+  }
+
+  // Draw face accessory
+  if (playerAccessory !== 'none') {
+    drawFaceAccessory(centerX, headY, headRadius);
+  }
+}
+
+function drawHat(centerX: number, headY: number, headRadius: number): void {
+  if (!gameCtx) return;
+
+  const topY = headY - headRadius;
+
+  switch (playerHat) {
+    case 'cap':
+      // Baseball cap
+      gameCtx.fillStyle = '#ef4444';
+      gameCtx.beginPath();
+      gameCtx.ellipse(centerX, topY - 2, headRadius + 2, 5, 0, 0, Math.PI * 2);
+      gameCtx.fill();
+      // Brim
+      gameCtx.fillRect(centerX - 2, topY - 4, headRadius + 8, 4);
+      break;
+
+    case 'tophat':
+      // Top hat
+      gameCtx.fillStyle = '#1a1a1a';
+      gameCtx.fillRect(centerX - 7, topY - 18, 14, 16);
+      // Brim
+      gameCtx.fillRect(centerX - 12, topY - 2, 24, 4);
+      break;
+
+    case 'crown':
+      // Crown
+      gameCtx.fillStyle = '#fbbf24';
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX - 10, topY);
+      gameCtx.lineTo(centerX - 10, topY - 8);
+      gameCtx.lineTo(centerX - 6, topY - 4);
+      gameCtx.lineTo(centerX - 3, topY - 12);
+      gameCtx.lineTo(centerX, topY - 6);
+      gameCtx.lineTo(centerX + 3, topY - 12);
+      gameCtx.lineTo(centerX + 6, topY - 4);
+      gameCtx.lineTo(centerX + 10, topY - 8);
+      gameCtx.lineTo(centerX + 10, topY);
+      gameCtx.closePath();
+      gameCtx.fill();
+      // Jewels
+      gameCtx.fillStyle = '#dc2626';
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, topY - 5, 2, 0, Math.PI * 2);
+      gameCtx.fill();
+      break;
+
+    case 'beanie':
+      // Beanie
+      gameCtx.fillStyle = '#3b82f6';
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, topY, headRadius + 1, Math.PI, 0);
+      gameCtx.fill();
+      // Pom pom
+      gameCtx.fillStyle = '#fff';
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, topY - headRadius - 3, 4, 0, Math.PI * 2);
+      gameCtx.fill();
+      break;
+
+    case 'party':
+      // Party hat
+      gameCtx.fillStyle = '#ec4899';
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, topY - 20);
+      gameCtx.lineTo(centerX - 10, topY);
+      gameCtx.lineTo(centerX + 10, topY);
+      gameCtx.closePath();
+      gameCtx.fill();
+      // Stripes
+      gameCtx.strokeStyle = '#fbbf24';
+      gameCtx.lineWidth = 2;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX - 8, topY - 4);
+      gameCtx.lineTo(centerX + 8, topY - 4);
+      gameCtx.moveTo(centerX - 5, topY - 10);
+      gameCtx.lineTo(centerX + 5, topY - 10);
+      gameCtx.stroke();
+      gameCtx.lineWidth = 3;
+      break;
+  }
+}
+
+function drawFaceAccessory(centerX: number, headY: number, headRadius: number): void {
+  if (!gameCtx) return;
+
+  switch (playerAccessory) {
+    case 'glasses':
+      // Round glasses
+      gameCtx.strokeStyle = '#333';
+      gameCtx.lineWidth = 1.5;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX - 4, headY - 1, 4, 0, Math.PI * 2);
+      gameCtx.arc(centerX + 4, headY - 1, 4, 0, Math.PI * 2);
+      gameCtx.stroke();
+      // Bridge
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX - 1, headY - 1);
+      gameCtx.lineTo(centerX + 1, headY - 1);
+      gameCtx.stroke();
+      gameCtx.lineWidth = 3;
+      break;
+
+    case 'sunglasses':
+      // Cool sunglasses
+      gameCtx.fillStyle = '#1a1a1a';
+      gameCtx.fillRect(centerX - 9, headY - 3, 7, 5);
+      gameCtx.fillRect(centerX + 2, headY - 3, 7, 5);
+      // Bridge
+      gameCtx.fillRect(centerX - 2, headY - 2, 4, 2);
+      break;
+
+    case 'mustache':
+      // Handlebar mustache
+      gameCtx.fillStyle = '#4a3728';
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX - 8, headY + 3);
+      gameCtx.quadraticCurveTo(centerX - 4, headY + 6, centerX, headY + 4);
+      gameCtx.quadraticCurveTo(centerX + 4, headY + 6, centerX + 8, headY + 3);
+      gameCtx.quadraticCurveTo(centerX + 4, headY + 4, centerX, headY + 3);
+      gameCtx.quadraticCurveTo(centerX - 4, headY + 4, centerX - 8, headY + 3);
+      gameCtx.fill();
+      break;
+
+    case 'beard':
+      // Full beard
+      gameCtx.fillStyle = '#4a3728';
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX - headRadius + 2, headY + 2);
+      gameCtx.quadraticCurveTo(centerX - headRadius, headY + 10, centerX, headY + 14);
+      gameCtx.quadraticCurveTo(centerX + headRadius, headY + 10, centerX + headRadius - 2, headY + 2);
+      gameCtx.quadraticCurveTo(centerX, headY + 6, centerX - headRadius + 2, headY + 2);
+      gameCtx.fill();
+      break;
+
+    case 'mask':
+      // Superhero mask
+      gameCtx.fillStyle = '#1a1a1a';
+      gameCtx.beginPath();
+      gameCtx.ellipse(centerX, headY - 1, headRadius - 1, 4, 0, 0, Math.PI * 2);
+      gameCtx.fill();
+      // Eye holes
+      gameCtx.fillStyle = '#fff';
+      gameCtx.beginPath();
+      gameCtx.ellipse(centerX - 4, headY - 1, 2.5, 2, 0, 0, Math.PI * 2);
+      gameCtx.ellipse(centerX + 4, headY - 1, 2.5, 2, 0, 0, Math.PI * 2);
+      gameCtx.fill();
+      break;
+  }
 }
 
 function drawHUD(): void {

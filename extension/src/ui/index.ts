@@ -525,6 +525,26 @@ const STYLES = `
     background: #22c55e;
   }
 
+  .char-customize-select {
+    background: #222;
+    color: #fff;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    min-width: 80px;
+  }
+
+  .char-customize-select:hover {
+    border-color: #555;
+  }
+
+  .char-customize-select:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+
   .game-mode-toggle {
     display: flex;
     background: #222;
@@ -1181,6 +1201,26 @@ export function initUI(): void {
         </div>
       </div>
 
+      <!-- Character Customization -->
+      <div class="toolbar-section">
+        <select class="char-customize-select" id="oo-hat-select" title="Hat">
+          <option value="none">No Hat</option>
+          <option value="cap">🧢 Cap</option>
+          <option value="tophat">🎩 Top Hat</option>
+          <option value="crown">👑 Crown</option>
+          <option value="beanie">🧶 Beanie</option>
+          <option value="party">🎉 Party</option>
+        </select>
+        <select class="char-customize-select" id="oo-accessory-select" title="Face">
+          <option value="none">No Face</option>
+          <option value="glasses">👓 Glasses</option>
+          <option value="sunglasses">🕶️ Shades</option>
+          <option value="mustache">🥸 Stache</option>
+          <option value="beard">🧔 Beard</option>
+          <option value="mask">🦸 Mask</option>
+        </select>
+      </div>
+
       <div class="toolbar-divider"></div>
 
       <!-- Play/Build Toggle -->
@@ -1493,6 +1533,32 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   if (localStorage.getItem('oo_player_girl') === 'true') {
     boyBtn?.classList.remove('active');
     girlBtn?.classList.add('active');
+  }
+
+  // Hat selection
+  const hatSelect = toolbar.querySelector('#oo-hat-select') as HTMLSelectElement;
+  hatSelect?.addEventListener('change', () => {
+    const hat = hatSelect.value;
+    document.dispatchEvent(new CustomEvent('oo:playerhat', { detail: { hat } }));
+  });
+
+  // Restore saved hat
+  const savedHat = localStorage.getItem('oo_player_hat');
+  if (savedHat && hatSelect) {
+    hatSelect.value = savedHat;
+  }
+
+  // Accessory selection
+  const accessorySelect = toolbar.querySelector('#oo-accessory-select') as HTMLSelectElement;
+  accessorySelect?.addEventListener('change', () => {
+    const accessory = accessorySelect.value;
+    document.dispatchEvent(new CustomEvent('oo:playeraccessory', { detail: { accessory } }));
+  });
+
+  // Restore saved accessory
+  const savedAccessory = localStorage.getItem('oo_player_accessory');
+  if (savedAccessory && accessorySelect) {
+    accessorySelect.value = savedAccessory;
   }
 
   // Drag functionality
