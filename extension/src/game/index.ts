@@ -1474,12 +1474,12 @@ function drawOtherPlayers(): void {
   if (!gameCtx) return;
 
   for (const [playerId, remotePlayer] of otherPlayers) {
-    drawRemotePlayer(remotePlayer);
+    drawRemotePlayer(playerId, remotePlayer);
   }
 }
 
 // Draw a remote player with their customizations
-function drawRemotePlayer(rp: RemotePlayer): void {
+function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
   if (!gameCtx) return;
 
   // Skip if player is dead
@@ -1599,21 +1599,32 @@ function drawRemotePlayer(rp: RemotePlayer): void {
     gameCtx.stroke();
   }
 
-  // Draw name above head
+  // Draw hat for remote player
+  if (rp.playerHat && rp.playerHat !== 'none') {
+    drawRemoteHat(centerX, headY, headRadius, rp.playerHat, color);
+  }
+
+  // Restore transform BEFORE drawing text (so text isn't mirrored)
+  gameCtx.restore();
+
+  // Draw name above head (after restore so text isn't flipped)
+  gameCtx.save();
+  gameCtx.globalAlpha = 0.85;
   if (rp.displayName) {
     gameCtx.shadowColor = 'transparent';
     gameCtx.fillStyle = 'rgba(0,0,0,0.6)';
+    gameCtx.font = '10px sans-serif';
     const nameWidth = gameCtx.measureText(rp.displayName).width;
     gameCtx.fillRect(centerX - nameWidth/2 - 4, headY - headRadius - 20, nameWidth + 8, 14);
     gameCtx.fillStyle = '#fff';
-    gameCtx.font = '10px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
     gameCtx.fillText(rp.displayName, centerX, headY - headRadius - 13);
   }
 
-  // Draw "IT" indicator for tag game
-  if (isTagMode && rp.isIt) {
+  // Draw "IT" indicator for tag game - check directly against tagGameState
+  const isThisPlayerIt = isTagMode && tagGameState?.itPlayerId === playerId;
+  if (isThisPlayerIt) {
     gameCtx.shadowColor = '#ff0000';
     gameCtx.shadowBlur = 15;
     gameCtx.fillStyle = '#ff0000';
@@ -1631,6 +1642,93 @@ function drawRemotePlayer(rp: RemotePlayer): void {
   }
 
   gameCtx.restore();
+}
+
+// Draw hat for remote players
+function drawRemoteHat(centerX: number, headY: number, headRadius: number, hat: string, playerColor: string): void {
+  if (!gameCtx) return;
+
+  const topY = headY - headRadius;
+
+  switch (hat) {
+    case 'cap':
+      // Baseball cap
+      gameCtx.fillStyle = '#ef4444';
+      gameCtx.beginPath();
+      gameCtx.ellipse(centerX, topY - 2, headRadius + 2, 5, 0, 0, Math.PI * 2);
+      gameCtx.fill();
+      // Brim
+      gameCtx.fillRect(centerX - 2, topY - 4, headRadius + 8, 4);
+      break;
+
+    case 'tophat':
+      // Top hat
+      gameCtx.fillStyle = '#1a1a1a';
+      // Brim
+      gameCtx.fillRect(centerX - 12, topY - 2, 24, 4);
+      // Hat body
+      gameCtx.fillRect(centerX - 8, topY - 18, 16, 16);
+      // Band
+      gameCtx.fillStyle = playerColor;
+      gameCtx.fillRect(centerX - 8, topY - 6, 16, 3);
+      break;
+
+    case 'crown':
+      // Crown
+      gameCtx.fillStyle = '#fbbf24';
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX - 10, topY);
+      gameCtx.lineTo(centerX - 10, topY - 8);
+      gameCtx.lineTo(centerX - 6, topY - 4);
+      gameCtx.lineTo(centerX - 3, topY - 12);
+      gameCtx.lineTo(centerX, topY - 6);
+      gameCtx.lineTo(centerX + 3, topY - 12);
+      gameCtx.lineTo(centerX + 6, topY - 4);
+      gameCtx.lineTo(centerX + 10, topY - 8);
+      gameCtx.lineTo(centerX + 10, topY);
+      gameCtx.closePath();
+      gameCtx.fill();
+      // Jewels
+      gameCtx.fillStyle = '#dc2626';
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, topY - 5, 2, 0, Math.PI * 2);
+      gameCtx.fill();
+      break;
+
+    case 'beanie':
+      // Beanie
+      gameCtx.fillStyle = '#3b82f6';
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, topY, headRadius + 1, Math.PI, 0);
+      gameCtx.fill();
+      // Pom pom
+      gameCtx.fillStyle = '#fff';
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, topY - headRadius - 3, 4, 0, Math.PI * 2);
+      gameCtx.fill();
+      break;
+
+    case 'party':
+      // Party hat
+      gameCtx.fillStyle = '#ec4899';
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, topY - 20);
+      gameCtx.lineTo(centerX - 10, topY);
+      gameCtx.lineTo(centerX + 10, topY);
+      gameCtx.closePath();
+      gameCtx.fill();
+      // Stripes
+      gameCtx.strokeStyle = '#fbbf24';
+      gameCtx.lineWidth = 2;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX - 8, topY - 4);
+      gameCtx.lineTo(centerX + 8, topY - 4);
+      gameCtx.moveTo(centerX - 5, topY - 10);
+      gameCtx.lineTo(centerX + 5, topY - 10);
+      gameCtx.stroke();
+      gameCtx.lineWidth = 3;
+      break;
+  }
 }
 
 function drawPlayer(): void {

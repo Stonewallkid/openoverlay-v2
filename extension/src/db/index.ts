@@ -919,8 +919,10 @@ export async function startTagGame(pageKey: string): Promise<boolean> {
 
     if (tagGameSnap.exists()) {
       // Game already exists, just join (don't change who's it)
-      console.log('[OpenOverlay] Joined existing tag game');
-      return true;
+      const existingState = tagGameSnap.data() as TagGameState;
+      console.log('[OpenOverlay] Joined existing tag game, IT is:', existingState.itPlayerId);
+      // Return true only if we are "it"
+      return existingState.itPlayerId === user.uid;
     }
 
     // Start new game - this player becomes "it"
