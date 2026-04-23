@@ -737,6 +737,9 @@ export interface RemotePlayer {
   isGirlMode: boolean;
   displayName: string;
   updatedAt: number;
+  // Tag game fields
+  isIt?: boolean;
+  tagCooldownUntil?: number;
 }
 
 let playerSyncUnsubscribe: Unsubscribe | null = null;
@@ -846,5 +849,141 @@ export function unsubscribeFromPlayers(): void {
   if (playerSyncUnsubscribe) {
     playerSyncUnsubscribe();
     playerSyncUnsubscribe = null;
+  }
+}
+
+// ============ TAG GAME ============
+
+export interface TagGameState {
+  itPlayerId: string;
+  lastTagTime: number;
+  gameActive: boolean;
+}
+
+let tagGameUnsubscribe: Unsubscribe | null = null;
+
+/**
+ * Subscribe to tag game state for a page
+ */
+export function subscribeToTagGame(
+  pageKey: string,
+  callback: (state: TagGameState | null) => void
+): Unsubscribe | null {
+  if (!db) {
+    console.log('[OpenOverlay] Cannot subscribe to tag game: Firestore not initialized');
+    return null;
+  }
+
+  // Unsubscribe from previous subscription
+  if (tagGameUnsubscribe) {
+    tagGameUnsubscribe();
+  }
+
+  const tagGameRef = doc(db, 'pageGames', pageKey, 'gameState', 'tag');
+
+  tagGameUnsubscribe = onSnapshot(tagGameRef, (docSnap) => {
+    if (docSnap.exists()) {
+      callback(docSnap.data() as TagGameState);
+    } else {
+      callback(null);
+    }
+  }, (error) => {
+    console.error('[OpenOverlay] Tag game subscription error:', error);
+    callback(null);
+  });
+
+  console.log('[OpenOverlay] Subscribed to tag game');
+  return tagGameUnsubscribe;
+}
+
+/**
+ * Unsubscribe from tag game updates
+ */
+export function unsubscribeFromTagGame(): void {
+  if (tagGameUnsubscribe) {
+    tagGameUnsubscribe();
+    tagGameUnsubscribe = null;
+  }
+}
+
+/**
+ * Start or join a tag game - first player becomes "it"
+ */
+export async function startTagGame(pageKey: string): Promise<boolean> {
+  const user = getCurrentUser();
+  if (!db || !user) return false;
+
+  try {
+    const tagGameRef = doc(db, 'pageGames', pageKey, 'gameState', 'tag');
+    const tagGameSnap = await getDoc(tagGameRef);
+
+    if (tagGameSnap.exists()) {
+      // Game already exists, just join (don't change who's it)
+      console.log('[OpenOverlay] Joined existing tag game');
+      return true;
+    }
+
+    // Start new game - this player becomes "it"
+    await setDoc(tagGameRef, {
+      itPlayerId: user.uid,
+      lastTagTime: Date.now(),
+      gameActive: true,
+    });
+
+    console.log('[OpenOverlay] Started new tag game - you are IT!');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to start tag game:', err);
+    return false;
+  }
+}
+
+/**
+ * Transfer "it" status to another player
+ */
+export async function tagPlayer(pageKey: string, targetPlayerId: string): Promise<boolean> {
+  const user = getCurrentUser();
+  if (!db || !user) return false;
+
+  try {
+    const tagGameRef = doc(db, 'pageGames', pageKey, 'gameState', 'tag');
+
+    // Verify we are currently "it" before transferring
+    const tagGameSnap = await getDoc(tagGameRef);
+    if (!tagGameSnap.exists()) return false;
+
+    const state = tagGameSnap.data() as TagGameState;
+    if (state.itPlayerId !== user.uid) {
+      console.log('[OpenOverlay] Cannot tag - you are not IT');
+      return false;
+    }
+
+    // Transfer tag
+    await setDoc(tagGameRef, {
+      itPlayerId: targetPlayerId,
+      lastTagTime: Date.now(),
+      gameActive: true,
+    });
+
+    console.log('[OpenOverlay] Tagged player:', targetPlayerId);
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to tag player:', err);
+    return false;
+  }
+}
+
+/**
+ * End the tag game
+ */
+export async function endTagGame(pageKey: string): Promise<void> {
+  if (!db) return;
+
+  try {
+    const tagGameRef = doc(db, 'pageGames', pageKey, 'gameState', 'tag');
+    await deleteDoc(tagGameRef);
+    console.log('[OpenOverlay] Tag game ended');
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to end tag game:', err);
   }
 }

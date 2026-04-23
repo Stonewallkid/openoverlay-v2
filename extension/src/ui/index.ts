@@ -1265,6 +1265,7 @@ export function initUI(): void {
           <button class="game-mode-btn active" data-mode="build" title="Build">🔨</button>
         </div>
         <button class="multiplayer-btn" id="oo-multiplayer-setup" title="Setup for multiplayer (resize window)">👥 MP</button>
+        <button class="multiplayer-btn" id="oo-tag-game" title="Start or join tag game">🏷️ Tag</button>
         <div class="char-style-toggle">
           <button class="char-style-btn active" id="oo-char-boy" title="Boy">👦</button>
           <button class="char-style-btn" id="oo-char-girl" title="Girl">👧</button>
@@ -1695,6 +1696,19 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       console.error('[OpenOverlay] Multiplayer setup error:', err);
       btn.textContent = '👥 MP';
       btn.disabled = false;
+    }
+  });
+
+  // Tag game button
+  const tagButton = toolbar.querySelector('#oo-tag-game');
+  tagButton?.addEventListener('click', () => {
+    document.dispatchEvent(new CustomEvent('oo:toggletag'));
+    tagButton.classList.toggle('active');
+    const btn = tagButton as HTMLButtonElement;
+    if (tagButton.classList.contains('active')) {
+      btn.textContent = '🏷️ IT!';
+    } else {
+      btn.textContent = '🏷️ Tag';
     }
   });
 

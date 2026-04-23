@@ -9,8 +9,15 @@ import {
   subscribeToPlayers,
   removePlayer,
   unsubscribeFromPlayers,
-  type RemotePlayer
+  subscribeToTagGame,
+  unsubscribeFromTagGame,
+  startTagGame,
+  tagPlayer,
+  endTagGame,
+  type RemotePlayer,
+  type TagGameState
 } from '@/db';
+import { getCurrentUser } from '@/auth';
 
 // Game state
 let gameCanvas: HTMLCanvasElement | null = null;
@@ -87,6 +94,12 @@ let lastSyncTime = 0;
 let lastSyncX = 0;
 let lastSyncY = 0;
 const SYNC_INTERVAL = 500; // Sync every 500ms (2 updates/sec) to avoid Firestore quota
+
+// Tag game state
+let isTagMode = false;
+let tagGameState: TagGameState | null = null;
+let localTagCooldownUntil = 0;
+const TAG_COOLDOWN = 2000; // 2 seconds cooldown after being tagged
 
 // Course elements
 interface Checkpoint {
@@ -262,6 +275,13 @@ export function initGame(): void {
     render();
   }) as EventListener);
 
+  // Listen for tag game toggle
+  document.addEventListener('oo:toggletag', () => {
+    if (gameMode === 'play') {
+      toggleTagMode();
+    }
+  });
+
   // Mouse events for building
   gameCanvas.addEventListener('pointerdown', onPointerDown);
   gameCanvas.addEventListener('pointermove', onPointerMove);
@@ -356,6 +376,14 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
       }
     });
 
+    // Subscribe to tag game state (will be null if no tag game active)
+    subscribeToTagGame(pageKey, (state) => {
+      tagGameState = state;
+      if (state?.gameActive) {
+        console.log('[OpenOverlay] Tag game active, "it" is:', state.itPlayerId);
+      }
+    });
+
     // Start countdown before player drops
     startCountdown();
 
@@ -377,8 +405,11 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
 
     // Unsubscribe from multiplayer and remove self
     unsubscribeFromPlayers();
+    unsubscribeFromTagGame();
     removePlayer(getPageKey());
     otherPlayers.clear();
+    isTagMode = false;
+    tagGameState = null;
   } else {
     // Mode is 'none' - keep player visible, keep game running
     showingFinishModal = false;
@@ -391,8 +422,11 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
 
     // Unsubscribe from multiplayer and remove self
     unsubscribeFromPlayers();
+    unsubscribeFromTagGame();
     removePlayer(getPageKey());
     otherPlayers.clear();
+    isTagMode = false;
+    tagGameState = null;
   }
 
   render();
@@ -877,6 +911,11 @@ function update(dt: number): void {
   // Check game elements (trampolines, speed boosts, etc.)
   checkGameElements();
 
+  // Check tag collisions with other players
+  if (isTagMode && tagGameState?.gameActive) {
+    checkPlayerTagCollision();
+  }
+
   // Update race time
   if (raceStarted && playMode === 'race') {
     raceTime = performance.now() - raceStartTime;
@@ -901,6 +940,7 @@ function update(dt: number): void {
 // Sync local player state to cloud
 function syncPlayerToCloud(): void {
   const pageKey = getPageKey();
+  const currentUser = getCurrentUser();
 
   // Sync feet position (y + height) for consistent ground level across different machines
   updatePlayerPosition(pageKey, {
@@ -916,8 +956,11 @@ function syncPlayerToCloud(): void {
     playerHat: playerHat,
     playerAccessory: playerAccessory,
     isGirlMode: isGirlMode,
-    displayName: '',
+    displayName: currentUser?.displayName || '',
     updatedAt: Date.now(),
+    // Tag game state
+    isIt: isTagMode && tagGameState?.itPlayerId === currentUser?.uid,
+    tagCooldownUntil: localTagCooldownUntil,
   });
 }
 
@@ -1030,6 +1073,44 @@ function checkGameElements(): void {
             handleDeath();
           }
           break;
+      }
+    }
+  }
+}
+
+/**
+ * Check for tag collisions with other players
+ */
+function checkPlayerTagCollision(): void {
+  if (!tagGameState?.gameActive) return;
+
+  const currentUser = getCurrentUser();
+  if (!currentUser) return;
+
+  const now = Date.now();
+  const pageKey = getPageKey();
+
+  // Player center and feet positions
+  const playerCenterX = player.x + player.width / 2;
+  const playerFeetY = player.y + player.height;
+
+  for (const [playerId, remote] of otherPlayers) {
+    // Calculate distance between players (use feet Y positions)
+    const dx = playerCenterX - remote.x;
+    const dy = playerFeetY - remote.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // Touch threshold - players are ~30px wide
+    if (distance < 40) {
+      // We're "it" and touched someone
+      if (tagGameState.itPlayerId === currentUser.uid && now > localTagCooldownUntil) {
+        // Check if target is not in cooldown
+        if (!remote.tagCooldownUntil || now > remote.tagCooldownUntil) {
+          // Tag them!
+          tagPlayer(pageKey, playerId);
+          localTagCooldownUntil = now + TAG_COOLDOWN;
+          showNotification('Tagged!', remote.displayName || 'Player', 1500);
+        }
       }
     }
   }
@@ -1531,6 +1612,24 @@ function drawRemotePlayer(rp: RemotePlayer): void {
     gameCtx.fillText(rp.displayName, centerX, headY - headRadius - 13);
   }
 
+  // Draw "IT" indicator for tag game
+  if (isTagMode && rp.isIt) {
+    gameCtx.shadowColor = '#ff0000';
+    gameCtx.shadowBlur = 15;
+    gameCtx.fillStyle = '#ff0000';
+    gameCtx.font = 'bold 14px sans-serif';
+    gameCtx.textAlign = 'center';
+    gameCtx.textBaseline = 'middle';
+    gameCtx.fillText('IT', centerX, headY - headRadius - 35);
+
+    // Red glow circle around head
+    gameCtx.strokeStyle = '#ff0000';
+    gameCtx.lineWidth = 2;
+    gameCtx.beginPath();
+    gameCtx.arc(centerX, headY, headRadius + 5, 0, Math.PI * 2);
+    gameCtx.stroke();
+  }
+
   gameCtx.restore();
 }
 
@@ -1783,6 +1882,25 @@ function drawPlayer(): void {
 
   // Draw accessories on top
   drawAccessories(centerX, headY, headRadius);
+
+  // Draw "IT" indicator for tag game (local player)
+  const currentUser = getCurrentUser();
+  if (isTagMode && tagGameState?.itPlayerId === currentUser?.uid) {
+    gameCtx.shadowColor = '#ff0000';
+    gameCtx.shadowBlur = 15;
+    gameCtx.fillStyle = '#ff0000';
+    gameCtx.font = 'bold 14px sans-serif';
+    gameCtx.textAlign = 'center';
+    gameCtx.textBaseline = 'middle';
+    gameCtx.fillText('IT', centerX, headY - headRadius - 20);
+
+    // Red glow circle around head
+    gameCtx.strokeStyle = '#ff0000';
+    gameCtx.lineWidth = 2;
+    gameCtx.beginPath();
+    gameCtx.arc(centerX, headY, headRadius + 5, 0, Math.PI * 2);
+    gameCtx.stroke();
+  }
 
   gameCtx.restore();
 }
@@ -2591,4 +2709,33 @@ export function setPlayerColor(color: string): void {
 
 export function getPlayerColor(): string {
   return playerColor;
+}
+
+// Tag game exports
+export function toggleTagMode(): void {
+  if (!isTagMode) {
+    // Start or join tag game
+    isTagMode = true;
+    const pageKey = getPageKey();
+    startTagGame(pageKey).then((isNowIt) => {
+      if (isNowIt) {
+        showNotification("You're IT!", 'Tag another player!', 2000);
+      } else {
+        showNotification('Tag Mode!', 'Avoid being tagged!', 2000);
+      }
+    });
+  } else {
+    // Leave tag game
+    isTagMode = false;
+    showNotification('Left tag game', '', 1500);
+  }
+}
+
+export function isInTagMode(): boolean {
+  return isTagMode;
+}
+
+export function isCurrentPlayerIt(): boolean {
+  const currentUser = getCurrentUser();
+  return isTagMode && tagGameState?.itPlayerId === currentUser?.uid;
 }
