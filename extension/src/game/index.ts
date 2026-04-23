@@ -4,6 +4,13 @@
  */
 
 import { checkPixelCollision } from '@/canvas';
+import {
+  updatePlayerPosition,
+  subscribeToPlayers,
+  removePlayer,
+  unsubscribeFromPlayers,
+  type RemotePlayer
+} from '@/db';
 
 // Game state
 let gameCanvas: HTMLCanvasElement | null = null;
@@ -73,6 +80,13 @@ interface BloodSplat {
   createdAt: number;
 }
 let bloodSplats: BloodSplat[] = [];
+
+// Multiplayer state
+let otherPlayers: Map<string, RemotePlayer> = new Map();
+let lastSyncTime = 0;
+let lastSyncX = 0;
+let lastSyncY = 0;
+const SYNC_INTERVAL = 500; // Sync every 500ms (2 updates/sec) to avoid Firestore quota
 
 // Course elements
 interface Checkpoint {
@@ -260,6 +274,14 @@ export function initGame(): void {
   loadCourse();
   render();
 
+  // Clean up multiplayer on page unload
+  window.addEventListener('beforeunload', () => {
+    if (gameMode === 'play') {
+      unsubscribeFromPlayers();
+      removePlayer(getPageKey());
+    }
+  });
+
   console.log('[OpenOverlay] Game initialized');
 }
 
@@ -321,6 +343,19 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
     showLeaderboard = false;
     removeNameInput();
 
+    // Subscribe to other players for multiplayer
+    const pageKey = getPageKey();
+    console.log('[OpenOverlay] Subscribing to players on page:', pageKey);
+    subscribeToPlayers(pageKey, (players) => {
+      otherPlayers = players;
+      if (players.size > 0) {
+        console.log('[OpenOverlay] Received', players.size, 'other players');
+        players.forEach((p, id) => {
+          console.log('[OpenOverlay] Player', id, 'at', p.x, p.y);
+        });
+      }
+    });
+
     // Start countdown before player drops
     startCountdown();
 
@@ -339,6 +374,11 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
     isCountingDown = false;
     playerFrozen = false;
     notification = null;
+
+    // Unsubscribe from multiplayer and remove self
+    unsubscribeFromPlayers();
+    removePlayer(getPageKey());
+    otherPlayers.clear();
   } else {
     // Mode is 'none' - keep player visible, keep game running
     showingFinishModal = false;
@@ -348,6 +388,11 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
     isCountingDown = false;
     playerFrozen = false;
     notification = null;
+
+    // Unsubscribe from multiplayer and remove self
+    unsubscribeFromPlayers();
+    removePlayer(getPageKey());
+    otherPlayers.clear();
   }
 
   render();
@@ -837,15 +882,43 @@ function update(dt: number): void {
     raceTime = performance.now() - raceStartTime;
   }
 
-  // Auto-scroll to follow player
-  const viewportCenterY = window.scrollY + window.innerHeight / 2;
-  const playerCenterY = player.y + player.height / 2;
-  if (Math.abs(playerCenterY - viewportCenterY) > window.innerHeight / 3) {
-    window.scrollTo({
-      top: playerCenterY - window.innerHeight / 2,
-      behavior: 'auto'
-    });
+  // Note: Auto-scroll removed - player and drawings should scroll together with the page
+
+  // Sync player position to cloud for multiplayer (only if moved)
+  const now = performance.now();
+  if (gameMode === 'play' && now - lastSyncTime > SYNC_INTERVAL) {
+    // Only sync if player moved more than 5 pixels
+    const moved = Math.abs(player.x - lastSyncX) > 5 || Math.abs(player.y - lastSyncY) > 5;
+    if (moved) {
+      lastSyncTime = now;
+      lastSyncX = player.x;
+      lastSyncY = player.y;
+      syncPlayerToCloud();
+    }
   }
+}
+
+// Sync local player state to cloud
+function syncPlayerToCloud(): void {
+  const pageKey = getPageKey();
+
+  // Sync feet position (y + height) for consistent ground level across different machines
+  updatePlayerPosition(pageKey, {
+    x: player.x,
+    y: player.y + player.height, // Send feet Y position
+    vx: player.vx,
+    vy: player.vy,
+    facingRight: player.facingRight,
+    animFrame: player.animFrame,
+    onGround: player.onGround,
+    isDead: isDead,
+    playerColor: playerColor,
+    playerHat: playerHat,
+    playerAccessory: playerAccessory,
+    isGirlMode: isGirlMode,
+    displayName: '',
+    updatedAt: Date.now(),
+  });
 }
 
 function checkCheckpoints(): void {
@@ -977,6 +1050,8 @@ function render(): void {
 
   // Draw player (only in play mode)
   if (gameMode === 'play') {
+    // Draw other players first (behind local player)
+    drawOtherPlayers();
     drawPlayer();
     drawHUD();
     // Note: Leaderboard and finish modal replaced by game popup
@@ -1308,6 +1383,152 @@ function drawCheckpoint(checkpoint: Checkpoint): void {
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
     gameCtx.fillText(String(checkpoint.order), x + 15, y - 40);
+  }
+
+  gameCtx.restore();
+}
+
+// Draw other players from multiplayer sync
+function drawOtherPlayers(): void {
+  if (!gameCtx) return;
+
+  for (const [playerId, remotePlayer] of otherPlayers) {
+    drawRemotePlayer(remotePlayer);
+  }
+}
+
+// Draw a remote player with their customizations
+function drawRemotePlayer(rp: RemotePlayer): void {
+  if (!gameCtx) return;
+
+  // Skip if player is dead
+  if (rp.isDead) return;
+
+  const w = 30;
+  const h = 50;
+  const x = rp.x;
+  // rp.y is the feet position, so subtract height to get top position
+  const y = rp.y - h;
+
+  gameCtx.save();
+
+  // Make remote players slightly transparent
+  gameCtx.globalAlpha = 0.85;
+
+  // Flip if facing left
+  if (!rp.facingRight) {
+    gameCtx.translate(x + w / 2, 0);
+    gameCtx.scale(-1, 1);
+    gameCtx.translate(-(x + w / 2), 0);
+  }
+
+  // Stick figure dimensions
+  const headRadius = 9;
+  const bodyLength = 18;
+  const limbLength = 14;
+
+  const centerX = x + w / 2;
+  const headY = y + headRadius + 3;
+  const bodyStartY = headY + headRadius;
+  const bodyEndY = bodyStartY + bodyLength;
+
+  const color = rp.playerColor || '#ffffff';
+
+  gameCtx.strokeStyle = color;
+  gameCtx.lineWidth = 3;
+  gameCtx.lineCap = 'round';
+  gameCtx.lineJoin = 'round';
+
+  // Shadow
+  gameCtx.shadowColor = 'rgba(0,0,0,0.3)';
+  gameCtx.shadowBlur = 4;
+  gameCtx.shadowOffsetX = 2;
+  gameCtx.shadowOffsetY = 2;
+
+  const isMoving = Math.abs(rp.vx) > 0.5;
+  const animFrame = rp.animFrame || 0;
+
+  if (rp.isGirlMode) {
+    // Girl character - simplified version
+    // Hair
+    gameCtx.fillStyle = color;
+    gameCtx.beginPath();
+    gameCtx.arc(centerX, headY, headRadius + 3, 0, Math.PI * 2);
+    gameCtx.fill();
+
+    // Face
+    gameCtx.fillStyle = '#fff';
+    gameCtx.beginPath();
+    gameCtx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
+    gameCtx.fill();
+
+    // Eyes
+    gameCtx.fillStyle = color;
+    gameCtx.beginPath();
+    gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
+    gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
+    gameCtx.fill();
+
+    // Body (dress shape)
+    gameCtx.fillStyle = color;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyStartY);
+    gameCtx.lineTo(centerX - 10, bodyEndY + 4);
+    gameCtx.lineTo(centerX + 10, bodyEndY + 4);
+    gameCtx.closePath();
+    gameCtx.fill();
+
+  } else {
+    // Boy character
+    // Head
+    gameCtx.beginPath();
+    gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+    gameCtx.stroke();
+
+    // Eyes
+    gameCtx.fillStyle = color;
+    gameCtx.beginPath();
+    gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
+    gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
+    gameCtx.fill();
+
+    // Body
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyStartY);
+    gameCtx.lineTo(centerX, bodyEndY);
+    gameCtx.stroke();
+
+    // Arms
+    const armY = bodyStartY + 4;
+    const armSwing = isMoving ? Math.sin(animFrame * Math.PI) * 8 : 0;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, armY);
+    gameCtx.lineTo(centerX - limbLength, armY + 8 + armSwing);
+    gameCtx.moveTo(centerX, armY);
+    gameCtx.lineTo(centerX + limbLength, armY + 8 - armSwing);
+    gameCtx.stroke();
+
+    // Legs
+    const legSwing = isMoving ? Math.sin(animFrame * Math.PI) * 10 : 0;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyEndY);
+    gameCtx.lineTo(centerX - 8 + legSwing, bodyEndY + limbLength);
+    gameCtx.moveTo(centerX, bodyEndY);
+    gameCtx.lineTo(centerX + 8 - legSwing, bodyEndY + limbLength);
+    gameCtx.stroke();
+  }
+
+  // Draw name above head
+  if (rp.displayName) {
+    gameCtx.shadowColor = 'transparent';
+    gameCtx.fillStyle = 'rgba(0,0,0,0.6)';
+    const nameWidth = gameCtx.measureText(rp.displayName).width;
+    gameCtx.fillRect(centerX - nameWidth/2 - 4, headY - headRadius - 20, nameWidth + 8, 14);
+    gameCtx.fillStyle = '#fff';
+    gameCtx.font = '10px sans-serif';
+    gameCtx.textAlign = 'center';
+    gameCtx.textBaseline = 'middle';
+    gameCtx.fillText(rp.displayName, centerX, headY - headRadius - 13);
   }
 
   gameCtx.restore();

@@ -55,6 +55,10 @@ function handleMessage(
       sendResponse({ success: true });
       return false;
 
+    case 'SETUP_MULTIPLAYER':
+      handleSetupMultiplayer(sender.tab?.id, sendResponse);
+      return true; // Will respond asynchronously
+
     default:
       return false;
   }
@@ -137,6 +141,43 @@ async function handleGetUser(
   } catch (error: any) {
     console.error('[OpenOverlay BG] Get user error:', error);
     sendResponse({ user: null, token: null });
+  }
+}
+
+/**
+ * Setup multiplayer mode - resize window and set zoom to 100%
+ */
+async function handleSetupMultiplayer(
+  tabId: number | undefined,
+  sendResponse: (response: any) => void
+): Promise<void> {
+  try {
+    // Standard multiplayer window size
+    const MULTIPLAYER_WIDTH = 1280;
+    const MULTIPLAYER_HEIGHT = 800;
+
+    // Get current window
+    const currentWindow = await chrome.windows.getCurrent();
+
+    if (currentWindow.id) {
+      // Resize window to standard size
+      await chrome.windows.update(currentWindow.id, {
+        width: MULTIPLAYER_WIDTH,
+        height: MULTIPLAYER_HEIGHT,
+        state: 'normal' // Exit maximized/fullscreen if needed
+      });
+    }
+
+    // Set zoom to 100% on the current tab
+    if (tabId) {
+      await chrome.tabs.setZoom(tabId, 1.0);
+    }
+
+    console.log('[OpenOverlay BG] Multiplayer setup complete:', MULTIPLAYER_WIDTH, 'x', MULTIPLAYER_HEIGHT);
+    sendResponse({ success: true, width: MULTIPLAYER_WIDTH, height: MULTIPLAYER_HEIGHT });
+  } catch (error: any) {
+    console.error('[OpenOverlay BG] Multiplayer setup error:', error);
+    sendResponse({ success: false, error: error.message });
   }
 }
 

@@ -718,3 +718,133 @@ export async function toggleReactionOnAnnotation(
     return false;
   }
 }
+
+// ============ MULTIPLAYER - REAL-TIME PLAYER SYNC ============
+
+export interface RemotePlayer {
+  odlPlayerId: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  facingRight: boolean;
+  animFrame: number;
+  onGround: boolean;
+  isDead: boolean;
+  playerColor: string;
+  playerHat: string;
+  playerAccessory: string;
+  isGirlMode: boolean;
+  displayName: string;
+  updatedAt: number;
+}
+
+let playerSyncUnsubscribe: Unsubscribe | null = null;
+
+/**
+ * Update current player's position in the cloud
+ */
+let lastSyncError = 0;
+export async function updatePlayerPosition(pageKey: string, state: Omit<RemotePlayer, 'odlPlayerId'>): Promise<void> {
+  const user = getCurrentUser();
+  if (!db || !user) {
+    console.log('[OpenOverlay] Cannot sync position: db=', !!db, 'user=', !!user);
+    return;
+  }
+
+  try {
+    const playerRef = doc(db, 'pageGames', pageKey, 'players', user.uid);
+    await setDoc(playerRef, {
+      ...state,
+      odlPlayerId: user.uid,
+      displayName: user.displayName || 'Player',
+      updatedAt: Date.now(),
+    }, { merge: true });
+    // Commented out to reduce console noise
+    // console.log('[OpenOverlay] Synced position to', pageKey, 'at', Math.round(state.x), Math.round(state.y));
+  } catch (err: any) {
+    // Only log error once every 10 seconds to avoid spamming
+    const now = Date.now();
+    if (now - lastSyncError > 10000) {
+      lastSyncError = now;
+      console.error('[OpenOverlay] Position sync error:', err?.message || err);
+    }
+  }
+}
+
+/**
+ * Subscribe to all players on a page
+ */
+export function subscribeToPlayers(
+  pageKey: string,
+  callback: (players: Map<string, RemotePlayer>) => void
+): Unsubscribe | null {
+  if (!db) {
+    console.log('[OpenOverlay] Cannot subscribe to players: Firestore not initialized');
+    return null;
+  }
+
+  const user = getCurrentUser();
+  console.log('[OpenOverlay] Subscribing to players for page:', pageKey, 'currentUser:', user?.uid);
+
+  // Unsubscribe from previous subscription
+  if (playerSyncUnsubscribe) {
+    playerSyncUnsubscribe();
+  }
+
+  const playersRef = collection(db, 'pageGames', pageKey, 'players');
+
+  playerSyncUnsubscribe = onSnapshot(playersRef, (snapshot) => {
+    const players = new Map<string, RemotePlayer>();
+    const now = Date.now();
+    const STALE_THRESHOLD = 10000; // 10 seconds (increased for slow sync)
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as RemotePlayer;
+      const age = now - data.updatedAt;
+
+      // Skip self and stale players
+      if (user && docSnap.id === user.uid) return;
+      if (age > STALE_THRESHOLD) return;
+
+      players.set(docSnap.id, data);
+    });
+
+    // Only log when we have other players
+    if (players.size > 0) {
+      console.log('[OpenOverlay] Got', players.size, 'other players from snapshot');
+    }
+    callback(players);
+  }, (error) => {
+    console.error('[OpenOverlay] Player subscription error:', error);
+  });
+
+  console.log('[OpenOverlay] Subscribed to players on page:', pageKey);
+  return playerSyncUnsubscribe;
+}
+
+/**
+ * Remove current player from the page
+ */
+export async function removePlayer(pageKey: string): Promise<void> {
+  const user = getCurrentUser();
+  if (!db || !user) return;
+
+  try {
+    const playerRef = doc(db, 'pageGames', pageKey, 'players', user.uid);
+    await deleteDoc(playerRef);
+    console.log('[OpenOverlay] Player removed from page');
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to remove player:', err);
+  }
+}
+
+/**
+ * Unsubscribe from player updates
+ */
+export function unsubscribeFromPlayers(): void {
+  if (playerSyncUnsubscribe) {
+    playerSyncUnsubscribe();
+    playerSyncUnsubscribe = null;
+  }
+}

@@ -207,6 +207,15 @@ export function initCanvas(): void {
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
+  // Redraw on scroll to keep collision canvas in sync
+  let scrollTimeout: number | null = null;
+  window.addEventListener('scroll', () => {
+    if (scrollTimeout) clearTimeout(scrollTimeout);
+    scrollTimeout = window.setTimeout(() => {
+      if (!isDrawing) redraw();
+    }, 50);
+  }, { passive: true });
+
   const resizeObserver = new ResizeObserver(resizeCanvas);
   resizeObserver.observe(document.body);
 
@@ -314,6 +323,8 @@ function resizeCanvas(): void {
   if (collisionCanvas && collisionCtx) {
     collisionCanvas.width = docWidth * dpr;
     collisionCanvas.height = docHeight * dpr;
+    // Reset transform before applying scale (setting width/height resets it, but be explicit)
+    collisionCtx.setTransform(1, 0, 0, 1, 0, 0);
     collisionCtx.scale(dpr, dpr);
   }
 
@@ -1275,6 +1286,7 @@ function redraw(): void {
   }
 
   // Draw normal layer items to main canvas (character collides with these)
+  console.log('[OpenOverlay] Rendering', normalItems.length, 'normal items to collision canvas (showOthers:', showOthersDrawings, ')');
   for (const { item, isOtherUser } of normalItems) {
     renderItemTo(ctx!, item, isOtherUser);
     renderItemCollision(item);
@@ -1629,9 +1641,9 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
     return { floor: false, floorY: 0, ceiling: false, ceilingY: 0 };
   }
 
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
   const dpr = window.devicePixelRatio || 1;
+  // Note: collision canvas is drawn in page coordinates, so use page coordinates directly
+  // (don't subtract scroll offset)
 
   let floor = false;
   let floorY = 0;
@@ -1640,14 +1652,14 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
 
   // Use center of player for checks, with some width
   const checkWidth = Math.max(1, Math.floor(width * 0.5 * dpr));
-  const centerX = Math.floor((x + width / 2 - scrollX) * dpr);
+  const centerX = Math.floor((x + width / 2) * dpr);
   const checkStartX = Math.max(0, centerX - Math.floor(checkWidth / 2));
 
   try {
     // FLOOR CHECK: Check a region around feet level
     // Start checking from 5px above feet to 15px below
     const feetPageY = y + height;
-    const scanStartY = Math.floor((feetPageY - 5 - scrollY) * dpr);
+    const scanStartY = Math.floor((feetPageY - 5) * dpr);
     const scanHeight = Math.floor(20 * dpr);
 
     if (checkStartX >= 0 && scanStartY >= 0 &&
@@ -1670,7 +1682,7 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
         if (hasPixel) {
           // Found solid pixels - this is the floor surface
           // Convert back to page coordinates
-          const surfaceY = scanStartY / dpr + scrollY + row / dpr;
+          const surfaceY = scanStartY / dpr + row / dpr;
           // Only count as floor if surface is at or below feet level
           if (surfaceY >= feetPageY - 10) {
             floor = true;
@@ -1683,7 +1695,7 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
 
     // CEILING CHECK: Check above head
     const headPageY = y;
-    const ceilScanStart = Math.max(0, Math.floor((headPageY - 15 - scrollY) * dpr));
+    const ceilScanStart = Math.max(0, Math.floor((headPageY - 15) * dpr));
     const ceilScanHeight = Math.floor(15 * dpr);
 
     if (checkStartX >= 0 && ceilScanStart >= 0 &&
@@ -1704,7 +1716,7 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
           }
         }
         if (hasPixel) {
-          const surfaceY = ceilScanStart / dpr + scrollY + (row + 1) / dpr;
+          const surfaceY = ceilScanStart / dpr + (row + 1) / dpr;
           // Only count as ceiling if it's above head
           if (surfaceY <= headPageY + 5) {
             ceiling = true;

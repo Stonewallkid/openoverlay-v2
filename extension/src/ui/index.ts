@@ -649,6 +649,26 @@ const STYLES = `
     color: white;
   }
 
+  .multiplayer-btn {
+    padding: 4px 8px;
+    border: none;
+    background: #7c3aed;
+    color: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    transition: background 0.1s;
+  }
+
+  .multiplayer-btn:hover {
+    background: #6d28d9;
+  }
+
+  .multiplayer-btn.active {
+    background: #22c55e;
+  }
+
   .mini.game-btn {
     background: #8b5cf6;
     color: white;
@@ -1237,13 +1257,14 @@ export function initUI(): void {
 
     <!-- GAME MODE CONTROLS -->
     <div class="game-controls" id="game-controls">
-      <!-- Row 1: Mode + Character -->
+      <!-- Row 1: Mode + Character + Multiplayer -->
       <div class="game-row">
         <div class="game-mode-toggle">
           <button class="game-mode-btn" data-mode="play" data-playmode="explore" title="Explore">🚶</button>
           <button class="game-mode-btn" data-mode="play" data-playmode="race" title="Race">🏃</button>
           <button class="game-mode-btn active" data-mode="build" title="Build">🔨</button>
         </div>
+        <button class="multiplayer-btn" id="oo-multiplayer-setup" title="Setup for multiplayer (resize window)">👥 MP</button>
         <div class="char-style-toggle">
           <button class="char-style-btn active" id="oo-char-boy" title="Boy">👦</button>
           <button class="char-style-btn" id="oo-char-girl" title="Girl">👧</button>
@@ -1644,6 +1665,37 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   toolbar.querySelector('#oo-game-save')?.addEventListener('click', () => {
     setMode('none');
     document.dispatchEvent(new CustomEvent('oo:save'));
+  });
+
+  // Multiplayer setup button - resize window for consistent coordinates
+  const mpButton = toolbar.querySelector('#oo-multiplayer-setup');
+  mpButton?.addEventListener('click', async () => {
+    const btn = mpButton as HTMLButtonElement;
+    btn.textContent = '⏳';
+    btn.disabled = true;
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'SETUP_MULTIPLAYER' });
+      if (response?.success) {
+        btn.textContent = '✓ Ready';
+        btn.classList.add('active');
+        setTimeout(() => {
+          btn.textContent = '👥 MP';
+          btn.disabled = false;
+        }, 2000);
+      } else {
+        btn.textContent = '❌ Error';
+        setTimeout(() => {
+          btn.textContent = '👥 MP';
+          btn.disabled = false;
+          btn.classList.remove('active');
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('[OpenOverlay] Multiplayer setup error:', err);
+      btn.textContent = '👥 MP';
+      btn.disabled = false;
+    }
   });
 
   // Drag functionality
