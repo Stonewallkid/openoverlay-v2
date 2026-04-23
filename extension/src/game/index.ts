@@ -277,8 +277,12 @@ export function initGame(): void {
 
   // Listen for tag game toggle
   document.addEventListener('oo:toggletag', () => {
+    console.log('[OpenOverlay] Tag toggle requested, gameMode:', gameMode);
     if (gameMode === 'play') {
       toggleTagMode();
+    } else {
+      console.log('[OpenOverlay] Cannot start tag - not in play mode');
+      showNotification('Enter play mode first', '🚶 or 🏃', 2000);
     }
   });
 
@@ -378,9 +382,17 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
 
     // Subscribe to tag game state (will be null if no tag game active)
     subscribeToTagGame(pageKey, (state) => {
+      const prevState = tagGameState;
       tagGameState = state;
+      console.log('[OpenOverlay] Tag game state changed:', state);
       if (state?.gameActive) {
         console.log('[OpenOverlay] Tag game active, "it" is:', state.itPlayerId);
+        if (prevState?.itPlayerId !== state.itPlayerId) {
+          const currentUser = getCurrentUser();
+          if (state.itPlayerId === currentUser?.uid) {
+            showNotification("You're IT!", 'Tag someone!', 2000);
+          }
+        }
       }
     });
 
@@ -870,6 +882,18 @@ function update(dt: number): void {
     player.vy = 1; // Start falling
   }
 
+  // Wall collision (horizontal)
+  if (player.vx < 0 && collision.leftWall) {
+    // Moving left into a wall
+    player.x = collision.leftWallX;
+    player.vx = 0;
+  }
+  if (player.vx > 0 && collision.rightWall) {
+    // Moving right into a wall
+    player.x = collision.rightWallX - player.width;
+    player.vx = 0;
+  }
+
   // Floor collision (when falling down)
   player.onGround = false;
 
@@ -923,12 +947,14 @@ function update(dt: number): void {
 
   // Note: Auto-scroll removed - player and drawings should scroll together with the page
 
-  // Sync player position to cloud for multiplayer (only if moved)
+  // Sync player position to cloud for multiplayer
   const now = performance.now();
   if (gameMode === 'play' && now - lastSyncTime > SYNC_INTERVAL) {
-    // Only sync if player moved more than 5 pixels
+    // Sync if moved more than 5 pixels, OR if we haven't synced in 5 seconds (keep-alive)
     const moved = Math.abs(player.x - lastSyncX) > 5 || Math.abs(player.y - lastSyncY) > 5;
-    if (moved) {
+    const needsKeepAlive = now - lastSyncTime > 5000; // Sync at least every 5 seconds
+
+    if (moved || needsKeepAlive) {
       lastSyncTime = now;
       lastSyncX = player.x;
       lastSyncY = player.y;
@@ -1101,16 +1127,29 @@ function checkPlayerTagCollision(): void {
     const distance = Math.sqrt(dx * dx + dy * dy);
 
     // Touch threshold - players are ~30px wide
-    if (distance < 40) {
-      // We're "it" and touched someone
-      if (tagGameState.itPlayerId === currentUser.uid && now > localTagCooldownUntil) {
-        // Check if target is not in cooldown
-        if (!remote.tagCooldownUntil || now > remote.tagCooldownUntil) {
-          // Tag them!
-          tagPlayer(pageKey, playerId);
-          localTagCooldownUntil = now + TAG_COOLDOWN;
-          showNotification('Tagged!', remote.displayName || 'Player', 1500);
-        }
+    if (distance < 60) { // Increased for debugging
+      const isWeIt = tagGameState.itPlayerId === currentUser.uid;
+      const offCooldown = now > localTagCooldownUntil;
+      const targetOffCooldown = !remote.tagCooldownUntil || now > remote.tagCooldownUntil;
+
+      // Debug log when close to another player
+      if (Math.random() < 0.05) { // 5% to avoid spam
+        console.log('[OpenOverlay] Near player:', {
+          distance: Math.round(distance),
+          isWeIt,
+          itPlayerId: tagGameState.itPlayerId,
+          ourId: currentUser.uid,
+          offCooldown,
+          targetOffCooldown,
+        });
+      }
+
+      if (distance < 40 && isWeIt && offCooldown && targetOffCooldown) {
+        // Tag them!
+        console.log('[OpenOverlay] TAGGING player:', playerId);
+        tagPlayer(pageKey, playerId);
+        localTagCooldownUntil = now + TAG_COOLDOWN;
+        showNotification('Tagged!', remote.displayName || 'Player', 1500);
       }
     }
   }
@@ -1474,6 +1513,15 @@ function drawOtherPlayers(): void {
   if (!gameCtx) return;
 
   for (const [playerId, remotePlayer] of otherPlayers) {
+    // Debug: log remote player data periodically
+    if (Math.random() < 0.01) { // 1% chance to avoid spam
+      console.log('[OpenOverlay] Remote player:', playerId, {
+        isGirlMode: remotePlayer.isGirlMode,
+        playerHat: remotePlayer.playerHat,
+        playerColor: remotePlayer.playerColor,
+        displayName: remotePlayer.displayName,
+      });
+    }
     drawRemotePlayer(playerId, remotePlayer);
   }
 }
@@ -2811,20 +2859,26 @@ export function getPlayerColor(): string {
 
 // Tag game exports
 export function toggleTagMode(): void {
+  console.log('[OpenOverlay] toggleTagMode called, current isTagMode:', isTagMode);
   if (!isTagMode) {
     // Start or join tag game
     isTagMode = true;
     const pageKey = getPageKey();
+    console.log('[OpenOverlay] Starting/joining tag game on page:', pageKey);
     startTagGame(pageKey).then((isNowIt) => {
+      console.log('[OpenOverlay] startTagGame returned:', isNowIt);
       if (isNowIt) {
         showNotification("You're IT!", 'Tag another player!', 2000);
       } else {
         showNotification('Tag Mode!', 'Avoid being tagged!', 2000);
       }
+    }).catch((err) => {
+      console.error('[OpenOverlay] startTagGame error:', err);
     });
   } else {
     // Leave tag game
     isTagMode = false;
+    console.log('[OpenOverlay] Left tag mode');
     showNotification('Left tag game', '', 1500);
   }
 }

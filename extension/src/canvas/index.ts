@@ -1635,10 +1635,14 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
   floorY: number;
   ceiling: boolean;
   ceilingY: number;
+  leftWall: boolean;
+  leftWallX: number;
+  rightWall: boolean;
+  rightWallX: number;
 } {
   // Use collision canvas which excludes background items
   if (!collisionCanvas || !collisionCtx) {
-    return { floor: false, floorY: 0, ceiling: false, ceilingY: 0 };
+    return { floor: false, floorY: 0, ceiling: false, ceilingY: 0, leftWall: false, leftWallX: 0, rightWall: false, rightWallX: 0 };
   }
 
   const dpr = window.devicePixelRatio || 1;
@@ -1649,6 +1653,10 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
   let floorY = 0;
   let ceiling = false;
   let ceilingY = 0;
+  let leftWall = false;
+  let leftWallX = 0;
+  let rightWall = false;
+  let rightWallX = 0;
 
   // Use center of player for checks, with some width
   const checkWidth = Math.max(1, Math.floor(width * 0.5 * dpr));
@@ -1726,11 +1734,62 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
         }
       }
     }
+    // WALL CHECKS: Check sides of player body (middle portion, not feet/head)
+    // Check from 20% down from top to 80% down (the body, not head or feet)
+    const wallCheckTop = Math.floor((y + height * 0.2) * dpr);
+    const wallCheckHeight = Math.floor(height * 0.5 * dpr);
+    const wallScanWidth = Math.floor(15 * dpr); // Check 15px to each side
+
+    // LEFT WALL CHECK
+    const leftScanX = Math.max(0, Math.floor(x * dpr) - wallScanWidth);
+    if (leftScanX >= 0 && wallCheckTop >= 0 &&
+        leftScanX + wallScanWidth <= collisionCanvas.width &&
+        wallCheckTop + wallCheckHeight <= collisionCanvas.height) {
+
+      const leftData = collisionCtx.getImageData(leftScanX, wallCheckTop, wallScanWidth, wallCheckHeight);
+
+      // Scan from right to left to find rightmost solid pixel (closest wall edge)
+      outerLeft: for (let col = wallScanWidth - 1; col >= 0; col--) {
+        for (let row = 0; row < wallCheckHeight; row++) {
+          const idx = (row * wallScanWidth + col) * 4;
+          const alpha = leftData.data[idx + 3];
+          if (alpha > 30) {
+            // Found a wall pixel - the wall edge is at this X
+            leftWall = true;
+            leftWallX = (leftScanX + col + 1) / dpr;
+            break outerLeft;
+          }
+        }
+      }
+    }
+
+    // RIGHT WALL CHECK
+    const rightScanX = Math.floor((x + width) * dpr);
+    if (rightScanX >= 0 && wallCheckTop >= 0 &&
+        rightScanX + wallScanWidth <= collisionCanvas.width &&
+        wallCheckTop + wallCheckHeight <= collisionCanvas.height) {
+
+      const rightData = collisionCtx.getImageData(rightScanX, wallCheckTop, wallScanWidth, wallCheckHeight);
+
+      // Scan from left to right to find leftmost solid pixel (closest wall edge)
+      outerRight: for (let col = 0; col < wallScanWidth; col++) {
+        for (let row = 0; row < wallCheckHeight; row++) {
+          const idx = (row * wallScanWidth + col) * 4;
+          const alpha = rightData.data[idx + 3];
+          if (alpha > 30) {
+            // Found a wall pixel
+            rightWall = true;
+            rightWallX = (rightScanX + col) / dpr;
+            break outerRight;
+          }
+        }
+      }
+    }
   } catch (e) {
     // getImageData can fail
   }
 
-  return { floor, floorY, ceiling, ceilingY };
+  return { floor, floorY, ceiling, ceilingY, leftWall, leftWallX, rightWall, rightWallX };
 }
 
 // Legacy function for compatibility - now returns empty since we use pixel collision

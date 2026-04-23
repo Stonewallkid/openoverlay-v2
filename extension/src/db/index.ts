@@ -800,7 +800,7 @@ export function subscribeToPlayers(
   playerSyncUnsubscribe = onSnapshot(playersRef, (snapshot) => {
     const players = new Map<string, RemotePlayer>();
     const now = Date.now();
-    const STALE_THRESHOLD = 10000; // 10 seconds (increased for slow sync)
+    const STALE_THRESHOLD = 30000; // 30 seconds - more forgiving for network issues
 
     snapshot.forEach((docSnap) => {
       const data = docSnap.data() as RemotePlayer;
