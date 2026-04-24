@@ -117,6 +117,7 @@ const TAG_COOLDOWN = 3000; // 3 seconds cooldown - needs to be longer than sync 
 const TAG_NOTIFICATION_DURATION = 5000; // How long to keep taggedPlayerId in sync
 const NTB_FLASH_DURATION = 3000; // "No Tag Backs" flash duration
 let ntbFlashEndTime = 0; // When the NTB flash should end
+const PLAYER_STALE_TIMEOUT = 5000; // Remove players who haven't updated in 5 seconds
 
 // Helper to check if current player is "it" (uses Firebase state or local fallback)
 function isCurrentUserIt(): boolean {
@@ -329,11 +330,22 @@ export function initGame(): void {
   loadCourse();
   render();
 
-  // Clean up multiplayer on page unload
-  window.addEventListener('beforeunload', () => {
+  // Clean up multiplayer on page unload (use multiple events for reliability)
+  const cleanupMultiplayer = () => {
     if (gameMode === 'play') {
       unsubscribeFromPlayers();
       removePlayer(getPageKey());
+    }
+  };
+
+  window.addEventListener('beforeunload', cleanupMultiplayer);
+  window.addEventListener('pagehide', cleanupMultiplayer);
+
+  // Also clean up when tab becomes hidden (user switches tabs)
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && gameMode === 'play') {
+      // Don't fully remove, just sync final position
+      syncPlayerToCloud();
     }
   });
 
@@ -925,9 +937,19 @@ function updateRemotePlayerPositions(): void {
     }
   }
 
-  // Clean up disconnected players
+  // Clean up disconnected players from display
   for (const playerId of displayPlayers.keys()) {
     if (!otherPlayers.has(playerId)) {
+      displayPlayers.delete(playerId);
+    }
+  }
+
+  // Clean up stale players who haven't updated recently
+  const realNow = Date.now();
+  for (const [playerId, player] of otherPlayers) {
+    if (player.updatedAt && realNow - player.updatedAt > PLAYER_STALE_TIMEOUT) {
+      console.log('[OpenOverlay] Removing stale player:', playerId);
+      otherPlayers.delete(playerId);
       displayPlayers.delete(playerId);
     }
   }
@@ -2157,7 +2179,7 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.font = 'bold 16px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
-    gameCtx.fillText('NTB', centerX, headY - headRadius - 25);
+    gameCtx.fillText('IT', centerX, headY - headRadius - 25);
     gameCtx.restore();
   }
 
@@ -2516,7 +2538,7 @@ function drawPlayer(): void {
     gameCtx.font = 'bold 16px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
-    gameCtx.fillText('NTB', centerX, headY - headRadius - 20);
+    gameCtx.fillText('IT', centerX, headY - headRadius - 20);
     gameCtx.restore();
   }
 
