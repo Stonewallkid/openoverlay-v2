@@ -14,8 +14,14 @@ import {
   startTagGame,
   tagPlayer,
   endTagGame,
+  saveCourseToCloud,
+  subscribeToCourses,
+  unsubscribeFromCourses,
+  isLoggedIn,
+  isFirestoreAvailable,
   type RemotePlayer,
-  type TagGameState
+  type TagGameState,
+  type CourseData,
 } from '@/db';
 import { getCurrentUser } from '@/auth';
 
@@ -48,8 +54,8 @@ let player: Player = {
   y: 100,
   vx: 0,
   vy: 0,
-  width: 30,
-  height: 50,
+  width: 23,   // 75% of original 30
+  height: 38,  // 75% of original 50
   onGround: false,
   facingRight: true,
   animFrame: 0,
@@ -74,6 +80,9 @@ const WAVE_DURATION = 2000; // Wave for 2 seconds
 let playerColor = localStorage.getItem('oo_player_color') || '#ffffff';
 let playerHat = localStorage.getItem('oo_player_hat') || 'none';
 let playerAccessory = localStorage.getItem('oo_player_accessory') || 'none';
+
+// Custom screen name (overrides Firebase displayName if set)
+let customScreenName = localStorage.getItem('oo_screen_name') || '';
 
 // Available customization options
 const HATS = ['none', 'cap', 'tophat', 'crown', 'beanie', 'party'];
@@ -166,12 +175,16 @@ let currentCourse: Course = {
   createdAt: Date.now(),
 };
 
+// Other users' courses (synced from Firebase)
+let otherUsersCourses: Course[] = [];
 
 // Game physics
 const GRAVITY = 0.6;
-const JUMP_FORCE = -14;
-const MOVE_SPEED = 5;
-const FRICTION = 0.7; // Quick stop when not pressing keys
+const JUMP_FORCE = -12;  // Reduced slightly for smaller player
+const MOVE_SPEED = 3;    // 60% of original 5
+const FRICTION = 0.7;    // Quick stop when not pressing keys
+const MAX_FALL_SPEED = 14; // Cap fall speed to prevent tunneling through platforms
+const COLLISION_SUBSTEP_SIZE = 6; // Max pixels per collision check step (smaller = more precise)
 
 // Input state
 const keys: { [key: string]: boolean } = {};
@@ -320,6 +333,14 @@ export function initGame(): void {
     playerAccessory = e.detail.accessory;
     localStorage.setItem('oo_player_accessory', playerAccessory);
     render();
+  }) as EventListener);
+
+  // Listen for screen name changes
+  document.addEventListener('oo:screenname', ((e: CustomEvent) => {
+    customScreenName = e.detail.name;
+    localStorage.setItem('oo_screen_name', customScreenName);
+    // Force a sync to update other players
+    syncPlayerToCloud();
   }) as EventListener);
 
   // Listen for tag game toggle
@@ -545,8 +566,10 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
     // Start countdown before player drops
     startCountdown();
 
-    // Hide toolbar
-    document.dispatchEvent(new CustomEvent('oo:hidetoolbar'));
+    // Hide toolbar only for race mode (explore mode keeps toolbar visible)
+    if (playMode === 'race') {
+      document.dispatchEvent(new CustomEvent('oo:hidetoolbar'));
+    }
 
     // Start game loop
     startGameLoop();
@@ -652,12 +675,17 @@ function startCountdown(): void {
   // Position player at spawn point
   respawnPlayer();
 
-  // In explore mode, skip countdown - just drop in immediately
+  // In explore mode, skip countdown but add brief grace period for collision canvas to render
   if (playMode === 'explore') {
     isCountingDown = false;
-    playerFrozen = false;
+    playerFrozen = true; // Start frozen to prevent falling through
     raceStarted = false; // Ensure race state is off
     showNotification('Explore!', 'No timer, unlimited respawns', 2000);
+
+    // Unfreeze after short delay to ensure collision canvas is drawn
+    setTimeout(() => {
+      playerFrozen = false;
+    }, 150);
     return;
   }
 
@@ -1031,10 +1059,14 @@ function update(dt: number): void {
         showGamePopup('gameover');
         return;
       }
-      // Respawn
+      // Respawn with brief grace period for collision
       isDead = false;
       respawnPlayer();
       notification = null;
+      playerFrozen = true;
+      setTimeout(() => {
+        playerFrozen = false;
+      }, 100);
     }
     return; // Don't update while dead
   }
@@ -1104,81 +1136,122 @@ function update(dt: number): void {
   }
   jumpKeyWasPressed = jumpKeyPressed;
 
-  // Apply gravity
+  // Apply gravity and cap fall speed
   player.vy += GRAVITY * dt;
+  if (player.vy > MAX_FALL_SPEED) player.vy = MAX_FALL_SPEED;
 
-  // --- PIXEL-PERFECT COLLISION DETECTION ---
+  // --- PIXEL-PERFECT COLLISION DETECTION WITH SUBSTEPS ---
+  // Break large movements into smaller steps to prevent tunneling
 
   // Max walkable slope angle (degrees) - steeper than this is a wall
   const MAX_SLOPE_ANGLE = 50;
-
-  // PRE-MOVEMENT COLLISION CHECK
-  // Check if there's a wall/steep slope ahead BEFORE moving
-  // This prevents clipping through at high speeds
-  const intendedX = player.x + player.vx * dt;
-  const intendedY = player.y + player.vy * dt;
   const movingRight = player.vx >= 0;
 
-  // Check collision at intended position
-  const preCollision = checkPixelCollision(
-    intendedX,
-    player.y, // Check at current Y first (horizontal movement)
-    player.width,
-    player.height,
-    movingRight
-  );
+  // Reset ground state - will be set true if we land
+  player.onGround = false;
 
-  // If hitting a wall horizontally, don't move X
-  let canMoveX = true;
-  if (player.vx < 0 && preCollision.leftWall) {
-    player.x = preCollision.leftWallX;
-    player.vx = 0;
-    canMoveX = false;
-  }
-  if (player.vx > 0 && preCollision.rightWall) {
-    player.x = preCollision.rightWallX - player.width;
-    player.vx = 0;
-    canMoveX = false;
-  }
+  // Calculate total movement
+  const totalMoveX = player.vx * dt;
+  const totalMoveY = player.vy * dt;
+  const totalDist = Math.sqrt(totalMoveX * totalMoveX + totalMoveY * totalMoveY);
 
-  // Check for steep slope ahead before moving
-  if (canMoveX && Math.abs(player.vx) > 0.5 && preCollision.slopeAheadY > 0) {
-    if (preCollision.slopeAngle > MAX_SLOPE_ANGLE) {
-      // Steep slope ahead - stop horizontal movement
-      player.vx = 0;
-      canMoveX = false;
-    }
-  }
+  // Determine number of substeps needed
+  const numSteps = Math.max(1, Math.ceil(totalDist / COLLISION_SUBSTEP_SIZE));
+  const stepX = totalMoveX / numSteps;
+  const stepY = totalMoveY / numSteps;
 
-  // PRE-MOVEMENT CEILING CHECK (when jumping up)
-  // This prevents jumping through walls/ceilings from below
-  let canMoveY = true;
-  if (player.vy < 0) {
-    // Check collision at intended Y position
-    const ceilingCheck = checkPixelCollision(
-      player.x,
-      intendedY,
+  // Process each substep
+  for (let step = 0; step < numSteps; step++) {
+    // Intended position for this substep
+    const intendedX = player.x + stepX;
+    const intendedY = player.y + stepY;
+
+    // PRE-MOVEMENT COLLISION CHECK (horizontal)
+    const preCollision = checkPixelCollision(
+      intendedX,
+      player.y,
       player.width,
       player.height,
       movingRight
     );
-    if (ceilingCheck.ceiling) {
-      // Hit ceiling - stop at ceiling and reverse velocity
-      player.y = ceilingCheck.ceilingY;
-      player.vy = 1; // Start falling
-      canMoveY = false;
+
+    // If hitting a wall horizontally, don't move X
+    let canMoveX = true;
+    if (player.vx < 0 && preCollision.leftWall) {
+      player.x = preCollision.leftWallX;
+      player.vx = 0;
+      canMoveX = false;
+    }
+    if (player.vx > 0 && preCollision.rightWall) {
+      player.x = preCollision.rightWallX - player.width;
+      player.vx = 0;
+      canMoveX = false;
+    }
+
+    // Check for steep slope ahead before moving
+    if (canMoveX && Math.abs(player.vx) > 0.5 && preCollision.slopeAheadY > 0) {
+      if (preCollision.slopeAngle > MAX_SLOPE_ANGLE) {
+        player.vx = 0;
+        canMoveX = false;
+      }
+    }
+
+    // PRE-MOVEMENT CEILING CHECK (when jumping up)
+    let canMoveY = true;
+    if (player.vy < 0) {
+      const ceilingCheck = checkPixelCollision(
+        player.x,
+        intendedY,
+        player.width,
+        player.height,
+        movingRight
+      );
+      if (ceilingCheck.ceiling) {
+        player.y = ceilingCheck.ceilingY;
+        player.vy = 1;
+        canMoveY = false;
+      }
+    }
+
+    // Apply substep movement
+    if (canMoveX) {
+      player.x += stepX;
+    }
+    if (canMoveY) {
+      player.y += stepY;
+    }
+
+    // Check floor collision after this substep (when falling)
+    if (player.vy >= 0) {
+      const floorCheck = checkPixelCollision(
+        player.x,
+        player.y,
+        player.width,
+        player.height,
+        movingRight
+      );
+      if (floorCheck.floor) {
+        const targetY = floorCheck.floorY - player.height;
+        const heightDiff = player.y - targetY;
+        const isFallingFast = player.vy > 5;
+        const maxSnapUp = isFallingFast ? 2 : 8; // Allow small snap even when fast
+
+        if (heightDiff <= maxSnapUp && heightDiff >= -COLLISION_SUBSTEP_SIZE) {
+          // Check if just landed
+          if (!wasOnGround && Math.abs(player.vx) > 0.5) {
+            landingSlideFrames = 8;
+          }
+          player.y = targetY;
+          player.vy = 0;
+          player.onGround = true;
+          player.jumpsRemaining = player.maxJumps;
+          break; // Stop substeps - we've landed
+        }
+      }
     }
   }
 
-  // Apply movement (may be reduced by collision checks above)
-  if (canMoveX) {
-    player.x += player.vx * dt;
-  }
-  if (canMoveY) {
-    player.y += player.vy * dt;
-  }
-
-  // Check collision at NEW player position (after movement)
+  // Final collision check at current position
   const collision = checkPixelCollision(
     player.x,
     player.y,
@@ -1216,23 +1289,15 @@ function update(dt: number): void {
     player.vx = 0;
   }
 
-  // Floor collision (when falling down or standing)
-  player.onGround = false;
-
-  if (player.vy >= 0 && collision.floor) {
+  // Final floor collision check (fallback if not caught by substeps)
+  // Only reset onGround if we're falling and didn't land in substeps
+  if (player.vy > 0 && !player.onGround && collision.floor) {
     const targetY = collision.floorY - player.height;
-    const heightDiff = player.y - targetY; // Positive = floor is above current position
+    const heightDiff = player.y - targetY;
 
-    // Allow snapping up to floors based on fall speed:
-    // - Fast falling (vy > 5): only snap to floors at or below current position
-    // - Slow/walking (vy <= 5): allow snapping up to 8px (for slope walking)
-    const isFallingFast = player.vy > 5;
-    const maxSnapUp = isFallingFast ? 0 : 8;
-
-    if (heightDiff <= maxSnapUp) {
-      // Check if just landed (wasn't on ground before)
+    if (heightDiff <= 8 && heightDiff >= -COLLISION_SUBSTEP_SIZE) {
       if (!wasOnGround && Math.abs(player.vx) > 0.5) {
-        landingSlideFrames = 8; // Slide for 8 frames
+        landingSlideFrames = 8;
       }
       player.y = targetY;
       player.vy = 0;
@@ -1354,7 +1419,7 @@ function syncPlayerToCloud(): void {
     playerHat: playerHat,
     playerAccessory: playerAccessory,
     isGirlMode: isGirlMode,
-    displayName: currentUser?.displayName || '',
+    displayName: customScreenName || currentUser?.displayName || '',
     updatedAt: now,
     // Tag game state (use helper for fallback)
     isIt: isTagMode && isCurrentUserIt(),
@@ -1376,9 +1441,15 @@ function checkCheckpoints(): void {
   // Only track checkpoints in race mode
   if (playMode !== 'race') return;
 
-  const totalCheckpoints = currentCourse.checkpoints.filter(c => c.type === 'checkpoint').length;
+  // Combine checkpoints from my course and other users' courses
+  const allCheckpoints: Checkpoint[] = [
+    ...currentCourse.checkpoints,
+    ...otherUsersCourses.flatMap(c => c.checkpoints)
+  ];
 
-  for (const checkpoint of currentCourse.checkpoints) {
+  const totalCheckpoints = allCheckpoints.filter(c => c.type === 'checkpoint').length;
+
+  for (const checkpoint of allCheckpoints) {
     if (checkpoint.reached) continue;
 
     const playerCenterX = player.x + player.width / 2;
@@ -1429,7 +1500,13 @@ function checkCheckpoints(): void {
 }
 
 function checkGameElements(): void {
-  for (const element of currentCourse.checkpoints) {
+  // Combine elements from my course and other users' courses
+  const allElements: Checkpoint[] = [
+    ...currentCourse.checkpoints,
+    ...otherUsersCourses.flatMap(c => c.checkpoints)
+  ];
+
+  for (const element of allElements) {
     // Only check interactive game elements
     if (!['trampoline', 'speedBoost', 'highJump', 'spike'].includes(element.type)) continue;
 
@@ -1586,9 +1663,16 @@ function render(): void {
   // Draw blood splats (behind everything)
   drawBloodSplats();
 
-  // Draw checkpoints and game elements
+  // Draw checkpoints and game elements from current user's course
   for (const checkpoint of currentCourse.checkpoints) {
     drawCheckpoint(checkpoint);
+  }
+
+  // Draw other users' course elements (so everyone can race each other's courses)
+  for (const course of otherUsersCourses) {
+    for (const checkpoint of course.checkpoints) {
+      drawCheckpoint(checkpoint, course.authorName);
+    }
   }
 
   // Draw player (in play mode and build mode - so characters stay visible while editing)
@@ -1646,13 +1730,21 @@ function drawBloodSplats(): void {
   }
 }
 
-function drawCheckpoint(checkpoint: Checkpoint): void {
+function drawCheckpoint(checkpoint: Checkpoint, authorName?: string): void {
   if (!gameCtx) return;
 
   const x = checkpoint.x;
   const y = checkpoint.y;
 
   gameCtx.save();
+
+  // Show author name for other users' elements (small text below the element)
+  if (authorName && (checkpoint.type === 'start' || checkpoint.type === 'finish')) {
+    gameCtx.font = '10px Arial';
+    gameCtx.fillStyle = 'rgba(255,255,255,0.7)';
+    gameCtx.textAlign = 'center';
+    gameCtx.fillText(`by ${authorName}`, x, y + 15);
+  }
 
   if (checkpoint.type === 'start') {
     // Race start arch
@@ -1985,10 +2077,10 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.translate(-(x + w / 2), 0);
   }
 
-  // Stick figure dimensions
-  const headRadius = 9;
-  const bodyLength = 18;
-  const limbLength = 14;
+  // Stick figure dimensions (scaled 75% for smaller player)
+  const headRadius = 7;
+  const bodyLength = 13;
+  const limbLength = 11;
 
   const centerX = x + w / 2;
   const headY = y + headRadius + 3;
@@ -2079,24 +2171,24 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
       gameCtx.lineWidth = 3;
     }
 
-    // 5. Dress body - solid triangle
+    // 5. Dress body - solid triangle (scaled 75%)
     gameCtx.fillStyle = color;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyStartY);
-    gameCtx.lineTo(centerX - 10, bodyEndY + 2);
-    gameCtx.lineTo(centerX + 10, bodyEndY + 2);
+    gameCtx.lineTo(centerX - 8, bodyEndY + 1);
+    gameCtx.lineTo(centerX + 8, bodyEndY + 1);
     gameCtx.closePath();
     gameCtx.fill();
 
-    // 6. Legs (under dress)
+    // 6. Legs (under dress) - scaled 75%
     gameCtx.strokeStyle = '#fff';
     gameCtx.lineWidth = 2;
-    const legSwingGirl = isMoving ? Math.sin(animFrame * Math.PI) * 8 : 0;
+    const legSwingGirl = isMoving ? Math.sin(animFrame * Math.PI) * 6 : 0;
     gameCtx.beginPath();
-    gameCtx.moveTo(centerX - 4, bodyEndY);
-    gameCtx.lineTo(centerX - 6 + legSwingGirl, bodyEndY + limbLength);
-    gameCtx.moveTo(centerX + 4, bodyEndY);
-    gameCtx.lineTo(centerX + 6 - legSwingGirl, bodyEndY + limbLength);
+    gameCtx.moveTo(centerX - 3, bodyEndY);
+    gameCtx.lineTo(centerX - 5 + legSwingGirl, bodyEndY + limbLength);
+    gameCtx.moveTo(centerX + 3, bodyEndY);
+    gameCtx.lineTo(centerX + 5 - legSwingGirl, bodyEndY + limbLength);
     gameCtx.stroke();
     gameCtx.lineWidth = 3;
     gameCtx.strokeStyle = color;
@@ -2109,13 +2201,13 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
     gameCtx.stroke();
 
-    // Hair - marker tip style
+    // Hair - marker tip style (scaled 75%)
     gameCtx.fillStyle = color;
     gameCtx.beginPath();
-    gameCtx.moveTo(centerX - 8, headY - headRadius + 1);
-    gameCtx.lineTo(centerX - 4, headY - headRadius - 5);
-    gameCtx.lineTo(centerX + 10, headY - headRadius + 4);
-    gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 8, headY - headRadius + 1);
+    gameCtx.moveTo(centerX - 6, headY - headRadius + 1);
+    gameCtx.lineTo(centerX - 3, headY - headRadius - 4);
+    gameCtx.lineTo(centerX + 8, headY - headRadius + 3);
+    gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 6, headY - headRadius + 1);
     gameCtx.closePath();
     gameCtx.fill();
     gameCtx.stroke();
@@ -2153,23 +2245,23 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.lineTo(centerX, bodyEndY);
     gameCtx.stroke();
 
-    // Arms
-    const armY = bodyStartY + 4;
-    const armSwing = isMoving ? Math.sin(animFrame * Math.PI) * 8 : 0;
+    // Arms (scaled 75%)
+    const armY = bodyStartY + 3;
+    const armSwing = isMoving ? Math.sin(animFrame * Math.PI) * 6 : 0;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, armY);
-    gameCtx.lineTo(centerX - limbLength, armY + 8 + armSwing);
+    gameCtx.lineTo(centerX - limbLength, armY + 6 + armSwing);
     gameCtx.moveTo(centerX, armY);
-    gameCtx.lineTo(centerX + limbLength, armY + 8 - armSwing);
+    gameCtx.lineTo(centerX + limbLength, armY + 6 - armSwing);
     gameCtx.stroke();
 
-    // Legs
-    const legSwing = isMoving ? Math.sin(animFrame * Math.PI) * 10 : 0;
+    // Legs (scaled 75%)
+    const legSwing = isMoving ? Math.sin(animFrame * Math.PI) * 8 : 0;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX - 8 + legSwing, bodyEndY + limbLength);
+    gameCtx.lineTo(centerX - 6 + legSwing, bodyEndY + limbLength);
     gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX + 8 - legSwing, bodyEndY + limbLength);
+    gameCtx.lineTo(centerX + 6 - legSwing, bodyEndY + limbLength);
     gameCtx.stroke();
   }
 
@@ -2183,17 +2275,17 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
 
   // Draw name above head (after restore so text isn't flipped)
   gameCtx.save();
-  gameCtx.globalAlpha = 0.85;
+  gameCtx.globalAlpha = 0.9;
   if (rp.displayName) {
     gameCtx.shadowColor = 'transparent';
-    gameCtx.fillStyle = 'rgba(0,0,0,0.6)';
-    gameCtx.font = '10px sans-serif';
+    gameCtx.fillStyle = 'rgba(0,0,0,0.7)';
+    gameCtx.font = 'bold 11px "Comic Sans MS", "Chalkboard SE", cursive';
     const nameWidth = gameCtx.measureText(rp.displayName).width;
-    gameCtx.fillRect(centerX - nameWidth/2 - 4, headY - headRadius - 20, nameWidth + 8, 14);
-    gameCtx.fillStyle = '#fff';
+    gameCtx.fillRect(centerX - nameWidth/2 - 5, headY - headRadius - 22, nameWidth + 10, 16);
+    gameCtx.fillStyle = rp.playerColor || '#fff';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
-    gameCtx.fillText(rp.displayName, centerX, headY - headRadius - 13);
+    gameCtx.fillText(rp.displayName, centerX, headY - headRadius - 14);
   }
 
   gameCtx.restore();
@@ -2323,10 +2415,10 @@ function drawPlayer(): void {
     gameCtx.translate(-(x + w / 2), 0);
   }
 
-  // Stick figure dimensions
-  const headRadius = 9;
-  const bodyLength = 18;
-  const limbLength = 14;
+  // Stick figure dimensions (scaled 75% for smaller player)
+  const headRadius = 7;
+  const bodyLength = 13;
+  const limbLength = 11;
 
   const centerX = x + w / 2;
   const headY = y + headRadius + 3;
@@ -2414,12 +2506,12 @@ function drawPlayer(): void {
       gameCtx.lineWidth = 3;
     }
 
-    // 5. Dress body - solid triangle
+    // 5. Dress body - solid triangle (scaled 75%)
     gameCtx.fillStyle = playerColor;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyStartY);
-    gameCtx.lineTo(centerX - 10, bodyEndY + 2);
-    gameCtx.lineTo(centerX + 10, bodyEndY + 2);
+    gameCtx.lineTo(centerX - 8, bodyEndY + 1);
+    gameCtx.lineTo(centerX + 8, bodyEndY + 1);
     gameCtx.closePath();
     gameCtx.fill();
 
@@ -2431,13 +2523,13 @@ function drawPlayer(): void {
     gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
     gameCtx.stroke();
 
-    // Hair - marker tip style
+    // Hair - marker tip style (scaled 75%)
     gameCtx.fillStyle = playerColor;
     gameCtx.beginPath();
-    gameCtx.moveTo(centerX - 8, headY - headRadius + 1);
-    gameCtx.lineTo(centerX - 4, headY - headRadius - 5);
-    gameCtx.lineTo(centerX + 10, headY - headRadius + 4);
-    gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 8, headY - headRadius + 1);
+    gameCtx.moveTo(centerX - 6, headY - headRadius + 1);
+    gameCtx.lineTo(centerX - 3, headY - headRadius - 4);
+    gameCtx.lineTo(centerX + 8, headY - headRadius + 3);
+    gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 6, headY - headRadius + 1);
     gameCtx.closePath();
     gameCtx.fill();
     gameCtx.stroke();
@@ -2506,28 +2598,28 @@ function drawPlayer(): void {
   );
   gameCtx.stroke();
 
-  // Legs
+  // Legs (scaled 75%)
   if (!player.onGround && player.vy < 0) {
     // Jumping up - legs tucked
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX - 6, bodyEndY + limbLength * 0.7);
+    gameCtx.lineTo(centerX - 5, bodyEndY + limbLength * 0.7);
     gameCtx.stroke();
 
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX + 6, bodyEndY + limbLength * 0.7);
+    gameCtx.lineTo(centerX + 5, bodyEndY + limbLength * 0.7);
     gameCtx.stroke();
   } else if (!player.onGround) {
     // Falling - legs spread
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX - 10, bodyEndY + limbLength);
+    gameCtx.lineTo(centerX - 8, bodyEndY + limbLength);
     gameCtx.stroke();
 
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX + 10, bodyEndY + limbLength);
+    gameCtx.lineTo(centerX + 8, bodyEndY + limbLength);
     gameCtx.stroke();
   } else {
     // Walking/standing - always show both legs spread
@@ -2896,14 +2988,29 @@ function drawHUD(): void {
       gameCtx.font = 'bold 16px sans-serif';
       gameCtx.fillText("You're IT! Tag someone!", scrollX + 20, scrollY + 48);
     } else {
-      // Find who is IT from other players
+      // Find who is IT - first check tagGameState (authoritative), then player sync
       let itPlayerName = '';
-      for (const [, rp] of otherPlayers) {
-        if (rp.isIt) {
-          itPlayerName = rp.displayName || 'Another player';
-          break;
+
+      // Method 1: Use tagGameState.itPlayerId to find the IT player
+      if (tagGameState?.itPlayerId) {
+        for (const [id, rp] of otherPlayers) {
+          if (id === tagGameState.itPlayerId) {
+            itPlayerName = rp.displayName || 'Another player';
+            break;
+          }
         }
       }
+
+      // Method 2: Fallback to checking rp.isIt flag
+      if (!itPlayerName) {
+        for (const [, rp] of otherPlayers) {
+          if (rp.isIt) {
+            itPlayerName = rp.displayName || 'Another player';
+            break;
+          }
+        }
+      }
+
       if (itPlayerName) {
         gameCtx.fillStyle = '#22c55e';
         gameCtx.font = 'bold 16px sans-serif';
@@ -3072,7 +3179,12 @@ function onKeyDown(e: KeyboardEvent): void {
   // Don't process keys if in finish modal (typing name) or if typing in an input
   if (showingFinishModal) return;
 
-  const activeEl = document.activeElement;
+  // Check if user is typing in an input field (including shadow DOM inputs)
+  let activeEl = document.activeElement;
+  // If active element is a shadow host, check its shadow root for the actual focused element
+  while (activeEl?.shadowRoot?.activeElement) {
+    activeEl = activeEl.shadowRoot.activeElement;
+  }
   const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || (activeEl as HTMLElement).isContentEditable);
   if (isTyping) return;
 
@@ -3209,22 +3321,55 @@ function generateId(): string {
   return Math.random().toString(36).substr(2, 9);
 }
 
-function saveCourse(): void {
+async function saveCourse(): Promise<void> {
   const pageKey = getPageKey();
   localStorage.setItem(`oo_course_${pageKey}`, JSON.stringify(currentCourse));
+
+  // Also save to cloud if logged in
+  if (isLoggedIn()) {
+    await saveCourseToCloud(pageKey, currentCourse);
+  }
+
   console.log('[OpenOverlay] Course saved');
 }
 
 function loadCourse(): void {
   const pageKey = getPageKey();
-  const data = localStorage.getItem(`oo_course_${pageKey}`);
 
+  // Try to subscribe to real-time course updates from Firebase
+  if (isFirestoreAvailable()) {
+    subscribeToCourses(pageKey, (data) => {
+      // Update my course from cloud (if exists)
+      if (data.myCourse) {
+        currentCourse = data.myCourse as Course;
+        currentCourse.checkpoints.forEach(c => c.reached = false);
+        // Update localStorage
+        localStorage.setItem(`oo_course_${pageKey}`, JSON.stringify(currentCourse));
+      }
+
+      // Store other users' courses
+      otherUsersCourses = data.otherCourses.map(c => ({
+        ...c,
+        checkpoints: (c.checkpoints || []).map((cp: Checkpoint) => ({ ...cp, reached: false }))
+      })) as Course[];
+
+      console.log('[OpenOverlay] Course sync: mine=', currentCourse.checkpoints.length, 'elements, others=', otherUsersCourses.length, 'courses');
+
+      // Re-render if in game mode
+      if (gameMode !== 'none') {
+        render();
+      }
+    });
+  }
+
+  // Also load from localStorage as initial/fallback
+  const data = localStorage.getItem(`oo_course_${pageKey}`);
   if (data) {
     try {
       currentCourse = JSON.parse(data);
       // Reset reached states
       currentCourse.checkpoints.forEach(c => c.reached = false);
-      console.log('[OpenOverlay] Course loaded:', currentCourse.checkpoints.length, 'checkpoints');
+      console.log('[OpenOverlay] Course loaded from localStorage:', currentCourse.checkpoints.length, 'checkpoints');
     } catch (e) {
       console.warn('[OpenOverlay] Failed to load course');
     }

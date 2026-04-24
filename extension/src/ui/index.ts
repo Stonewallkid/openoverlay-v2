@@ -19,8 +19,9 @@ let shapeFilled: boolean = false;
 let isEraser = false;
 let drawLayer: 'normal' | 'background' | 'foreground' = 'normal';
 let pendingText: string = '';
-let gameSubMode: 'play' | 'build' = 'build';
+let gameSubMode: 'play' | 'build' = 'play';
 let gameBuildTool: string = 'spawn';
+let toolbarJustOpened = false; // Prevents click-outside from firing on same click that opened toolbar
 
 // Auth state
 let currentAuthUser: User | null = null;
@@ -69,16 +70,21 @@ const STYLES = `
   }
 
   .fab-container {
-    position: fixed;
-    right: 18px;
-    bottom: 18px;
-    z-index: 2147483647;
-    display: flex;
-    flex-direction: column-reverse;
-    align-items: center;
-    gap: 8px;
-    pointer-events: auto;
-    touch-action: none;
+    all: initial;
+    position: fixed !important;
+    right: 18px !important;
+    bottom: 18px !important;
+    z-index: 2147483647 !important;
+    display: flex !important;
+    flex-direction: column-reverse !important;
+    align-items: center !important;
+    gap: 8px !important;
+    pointer-events: auto !important;
+    touch-action: none !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    transform: none !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
   }
 
   .fab-container.dragging {
@@ -90,16 +96,25 @@ const STYLES = `
   }
 
   .fab {
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    border: none;
-    background: rgba(255, 255, 255, 0.95);
-    color: #222;
-    font-size: 20px;
-    cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    transition: transform 0.15s, background 0.15s;
+    all: initial;
+    width: 56px !important;
+    height: 56px !important;
+    min-width: 56px !important;
+    min-height: 56px !important;
+    border-radius: 50% !important;
+    border: none !important;
+    background: rgba(255, 255, 255, 0.95) !important;
+    color: #222 !important;
+    font-size: 20px !important;
+    cursor: pointer !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    transition: transform 0.15s, background 0.15s !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
   }
 
   .fab:hover {
@@ -592,6 +607,50 @@ const STYLES = `
   .char-customize-select:focus {
     outline: none;
     border-color: #22c55e;
+  }
+
+  .screen-name-section {
+    margin: 16px 0;
+    padding: 12px;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 10px;
+    border: 2px solid #0f3460;
+  }
+
+  .screen-name-label {
+    display: block;
+    font-size: 13px;
+    color: #e94560;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: bold;
+    text-align: center;
+  }
+
+  .screen-name-input {
+    width: 100%;
+    background: #0a0a15;
+    color: #fff;
+    border: 2px solid #e94560;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 18px;
+    font-family: "Comic Sans MS", "Chalkboard SE", cursive;
+    text-align: center;
+    box-sizing: border-box;
+  }
+
+  .screen-name-input::placeholder {
+    color: #666;
+    font-style: italic;
+  }
+
+  .screen-name-input:focus {
+    outline: none;
+    border-color: #22c55e;
+    background: #111;
+    box-shadow: 0 0 10px rgba(233, 69, 96, 0.3);
   }
 
   .game-mode-toggle {
@@ -1229,13 +1288,25 @@ export function initUI(): void {
   shadowHost = document.createElement('div');
   shadowHost.id = 'openoverlay-ui';
   shadowHost.style.cssText = `
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    z-index: 2147483647;
-    pointer-events: none;
+    all: initial;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 2147483647 !important;
+    pointer-events: none !important;
+    overflow: visible !important;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    transform: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-sizing: border-box !important;
   `;
   shadowRoot = shadowHost.attachShadow({ mode: 'open' });
 
@@ -1253,7 +1324,14 @@ export function initUI(): void {
   fab.className = 'fab';
   fab.textContent = '•••';
   fab.title = 'OpenOverlay';
-  fab.onclick = toggleMenu;
+  fab.onclick = () => {
+    // Close profile modal if open
+    if (isProfileModalOpen) {
+      isProfileModalOpen = false;
+      shadowRoot?.querySelector('#oo-profile-modal')?.classList.remove('show');
+    }
+    toggleMenu();
+  };
   container.appendChild(fab);
 
   // Draw button
@@ -1376,6 +1454,10 @@ export function initUI(): void {
           <p class="profile-email" id="profile-email">email@example.com</p>
         </div>
       </div>
+      <div class="screen-name-section">
+        <label class="screen-name-label">Your Game Name</label>
+        <input type="text" class="screen-name-input" id="oo-screen-name" placeholder="Pick a nickname!" maxlength="12">
+      </div>
       <div class="profile-stats">
         <div class="profile-stat" id="followers-stat">
           <div class="profile-stat-value" id="followers-count">0</div>
@@ -1487,8 +1569,10 @@ export function initUI(): void {
                     data-style="${s.id}" title="${s.title}">${s.label}</button>
           `).join('')}
         </div>
+        <button class="tool-btn" id="oo-text-layer-bg" title="Background (behind character)">⬇️</button>
+        <button class="tool-btn" id="oo-text-layer-fg" title="Foreground (in front of character)">⬆️</button>
       </div>
-      <span class="place-hint">Click page to place</span>
+      <span class="place-hint">Click page to place (default: regular layer)</span>
     </div>
 
     <!-- GAME MODE CONTROLS -->
@@ -1496,9 +1580,9 @@ export function initUI(): void {
       <!-- Row 1: Mode + Character + Multiplayer -->
       <div class="game-row">
         <div class="game-mode-toggle">
-          <button class="game-mode-btn" data-mode="play" data-playmode="explore" title="Explore">🚶</button>
+          <button class="game-mode-btn active" data-mode="play" data-playmode="explore" title="Explore">🚶</button>
           <button class="game-mode-btn" data-mode="play" data-playmode="race" title="Race">🏃</button>
-          <button class="game-mode-btn active" data-mode="build" title="Build">🔨</button>
+          <button class="game-mode-btn" data-mode="build" title="Build">🔨</button>
         </div>
         <button class="multiplayer-btn" id="oo-multiplayer-setup" title="Setup for multiplayer (resize window)">👥 MP</button>
         <button class="multiplayer-btn" id="oo-tag-game" title="Start or join tag game">🏷️ Tag</button>
@@ -1524,8 +1608,8 @@ export function initUI(): void {
         </select>
       </div>
 
-      <!-- Row 2: Build Tools -->
-      <div class="game-row build-tools-section">
+      <!-- Row 2: Build Tools (hidden by default, shown when build mode selected) -->
+      <div class="game-row build-tools-section" style="display: none;">
         <div class="game-tools" id="game-tools">
           <button class="game-tool-btn" data-tool="select" title="Select">✋</button>
           <button class="game-tool-btn active" data-tool="spawn" title="Spawn">👤</button>
@@ -1599,8 +1683,8 @@ export function initUI(): void {
     toolbar?.classList.remove('show');
     // Reset currentMode so clicking game button again will re-open toolbar
     currentMode = 'none';
-    // Reset game sub mode to build for next time
-    gameSubMode = 'build';
+    // Reset game sub mode to explore for next time
+    gameSubMode = 'play';
     // Update button states
     const minis = shadowRoot?.querySelectorAll('.mini');
     minis?.forEach(mini => mini.classList.remove('active'));
@@ -1731,6 +1815,29 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     }
     toolbar.querySelector('#oo-layer-fg')?.classList.toggle('active', drawLayer === 'foreground');
     toolbar.querySelector('#oo-layer-bg')?.classList.remove('active');
+    dispatchSettingsChange();
+  });
+
+  // Text layer toggles (same behavior, separate buttons for text mode)
+  toolbar.querySelector('#oo-text-layer-bg')?.addEventListener('click', () => {
+    if (drawLayer === 'background') {
+      drawLayer = 'normal';
+    } else {
+      drawLayer = 'background';
+    }
+    toolbar.querySelector('#oo-text-layer-bg')?.classList.toggle('active', drawLayer === 'background');
+    toolbar.querySelector('#oo-text-layer-fg')?.classList.remove('active');
+    dispatchSettingsChange();
+  });
+
+  toolbar.querySelector('#oo-text-layer-fg')?.addEventListener('click', () => {
+    if (drawLayer === 'foreground') {
+      drawLayer = 'normal';
+    } else {
+      drawLayer = 'foreground';
+    }
+    toolbar.querySelector('#oo-text-layer-fg')?.classList.toggle('active', drawLayer === 'foreground');
+    toolbar.querySelector('#oo-text-layer-bg')?.classList.remove('active');
     dispatchSettingsChange();
   });
 
@@ -1885,17 +1992,64 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   });
 
   toolbar.querySelector('#oo-game-save')?.addEventListener('click', () => {
-    // Just save without hiding - keep game mode active
+    // Save and close toolbar, but keep game active
     document.dispatchEvent(new CustomEvent('oo:save'));
-    // Show confirmation
-    const btn = toolbar.querySelector('#oo-game-save') as HTMLButtonElement;
-    const originalText = btn.textContent;
-    btn.textContent = '✓';
-    btn.style.background = '#22c55e';
-    setTimeout(() => {
-      btn.textContent = originalText;
-      btn.style.background = '';
-    }, 1000);
+    // Switch to explore mode (not build) so drawing undo works
+    // This keeps the game active but allows drawing mode to function properly
+    document.dispatchEvent(new CustomEvent('oo:gamemode', {
+      detail: { mode: 'play', playmode: 'explore' }
+    }));
+    // Hide toolbar but don't exit game mode
+    toolbar.classList.remove('show');
+    currentMode = 'none'; // Reset so clicking game button reopens toolbar
+  });
+
+  // Click outside toolbar to save and close (only in game play mode, not build mode)
+  document.addEventListener('click', (e) => {
+    // Skip if toolbar was just opened (prevents closing on the same click that opened it)
+    if (toolbarJustOpened) {
+      toolbarJustOpened = false;
+      return;
+    }
+
+    if (currentMode !== 'game') return;
+    if (!toolbar.classList.contains('show')) return;
+
+    // Don't close toolbar in build mode - clicks on page are for placing elements
+    if (gameSubMode === 'build') return;
+
+    // Check if click is inside our shadow DOM using composedPath
+    // This properly handles clicks across shadow DOM boundaries
+    const path = e.composedPath();
+    const shadowHostEl = shadowRoot?.host;
+
+    // If click path includes the shadow host, it was inside our UI
+    if (shadowHostEl && path.includes(shadowHostEl)) return;
+
+    // Click was outside - save and close
+    document.dispatchEvent(new CustomEvent('oo:save'));
+    // Switch to explore mode (not build) so drawing undo works
+    document.dispatchEvent(new CustomEvent('oo:gamemode', {
+      detail: { mode: 'play', playmode: 'explore' }
+    }));
+    toolbar.classList.remove('show');
+    currentMode = 'none';
+  });
+
+  // Click outside profile modal to close it
+  document.addEventListener('click', (e) => {
+    if (!isProfileModalOpen) return;
+
+    // Check if click is inside our shadow DOM using composedPath
+    const path = e.composedPath();
+    const shadowHostEl = shadowRoot?.host;
+
+    // If click path includes the shadow host, it was inside our UI
+    if (shadowHostEl && path.includes(shadowHostEl)) return;
+
+    // Click was outside - close profile modal
+    isProfileModalOpen = false;
+    shadowRoot?.querySelector('#oo-profile-modal')?.classList.remove('show');
   });
 
   // Multiplayer setup button - resize window for consistent coordinates
@@ -2063,6 +2217,29 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       console.error('[OpenOverlay] Sign out failed:', error);
     }
   });
+
+  // Screen name input
+  const screenNameInput = shadowRoot.querySelector('#oo-screen-name') as HTMLInputElement;
+  if (screenNameInput) {
+    // Restore saved screen name
+    const savedScreenName = localStorage.getItem('oo_screen_name');
+    if (savedScreenName) {
+      screenNameInput.value = savedScreenName;
+    }
+
+    screenNameInput.addEventListener('change', () => {
+      const name = screenNameInput.value.trim();
+      localStorage.setItem('oo_screen_name', name);
+      document.dispatchEvent(new CustomEvent('oo:screenname', { detail: { name } }));
+    });
+
+    screenNameInput.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        screenNameInput.blur();
+      }
+    });
+  }
 
   // Feedback form submission
   const feedbackSubmitBtn = shadowRoot.querySelector('#feedback-submit');
@@ -2502,10 +2679,18 @@ function setMode(mode: 'none' | 'draw' | 'text' | 'game'): void {
     }
   }
 
-  // Reset eraser when entering mode
+  // Reset eraser and layer when entering mode
   if (mode !== 'none') {
     isEraser = false;
     shadowRoot?.querySelector('#oo-eraser')?.classList.remove('active');
+
+    // Reset layer to normal when entering draw or text mode
+    drawLayer = 'normal';
+    // Clear all layer button active states
+    shadowRoot?.querySelector('#oo-layer-bg')?.classList.remove('active');
+    shadowRoot?.querySelector('#oo-layer-fg')?.classList.remove('active');
+    shadowRoot?.querySelector('#oo-text-layer-bg')?.classList.remove('active');
+    shadowRoot?.querySelector('#oo-text-layer-fg')?.classList.remove('active');
   }
 
   // Clear pending text when leaving text mode
@@ -2520,23 +2705,27 @@ function setMode(mode: 'none' | 'draw' | 'text' | 'game'): void {
 
   // Handle game mode
   if (mode === 'game') {
-    // Always start in build mode when opening game toolbar
-    gameSubMode = 'build';
+    // Prevent click-outside handler from closing toolbar immediately
+    toolbarJustOpened = true;
 
-    // Reset the game mode toggle buttons to show Build as active
+    // Always start in explore (play) mode when opening game toolbar
+    gameSubMode = 'play';
+
+    // Reset the game mode toggle buttons to show Explore as active
     const gameModeButtons = shadowRoot?.querySelectorAll('.game-mode-btn');
     gameModeButtons?.forEach(btn => {
       const btnMode = (btn as HTMLElement).dataset.mode;
-      btn.classList.toggle('active', btnMode === 'build');
+      const playmode = (btn as HTMLElement).dataset.playmode;
+      btn.classList.toggle('active', btnMode === 'play' && playmode === 'explore');
     });
 
-    // Show build tools
+    // Hide build tools (explore mode doesn't need them)
     const buildTools = shadowRoot?.querySelector('.build-tools-section') as HTMLElement;
-    if (buildTools) buildTools.style.display = 'flex';
+    if (buildTools) buildTools.style.display = 'none';
 
-    // Dispatch build mode
+    // Dispatch explore mode
     document.dispatchEvent(new CustomEvent('oo:gamemode', {
-      detail: { mode: 'build', tool: gameBuildTool }
+      detail: { mode: 'play', playmode: 'explore' }
     }));
   } else if (prevMode === 'game') {
     // Exiting game mode

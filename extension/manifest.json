@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "OpenOverlay",
-  "version": "2.0.0",
-  "description": "Draw, annotate, and play games on any webpage. Share with friends.",
+  "name": "Smudgz",
+  "version": "1.0.0",
+  "description": "Turn any webpage into a playground. Draw, play multiplayer games, and connect with friends on any website.",
+  "homepage_url": "https://smudgz.com",
   "permissions": [
     "storage",
     "activeTab",
@@ -23,7 +24,7 @@
     ]
   },
   "action": {
-    "default_title": "OpenOverlay",
+    "default_title": "Smudgz - Draw & Play",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

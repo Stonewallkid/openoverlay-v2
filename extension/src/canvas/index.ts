@@ -48,6 +48,7 @@ interface TextItem {
   opacity: number;
   style: string; // 'normal' | 'rainbow' | 'aged'
   rotation?: number; // Rotation in radians
+  layer?: 'normal' | 'background' | 'foreground'; // Layer for render order
 }
 
 // Shape item
@@ -226,30 +227,61 @@ export function initCanvas(): void {
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
-  // Redraw on scroll to keep collision canvas in sync
+  // Detect heavy sites early for scroll/resize throttling
+  const isHeavySiteEarly = /yahoo|facebook|twitter|instagram|tiktok|reddit/i.test(window.location.hostname);
+  const scrollDebounce = isHeavySiteEarly ? 500 : 150;
+
+  // Redraw on scroll to keep collision canvas in sync (debounced)
   let scrollTimeout: number | null = null;
   window.addEventListener('scroll', () => {
     if (scrollTimeout) clearTimeout(scrollTimeout);
     scrollTimeout = window.setTimeout(() => {
       if (!isDrawing) redraw();
-    }, 50);
+    }, scrollDebounce);
   }, { passive: true });
 
-  const resizeObserver = new ResizeObserver(resizeCanvas);
-  resizeObserver.observe(document.body);
+  // Resize observer - only watch documentElement for size changes
+  let resizeTimeout: number | null = null;
+  const resizeObserver = new ResizeObserver(() => {
+    // Debounce resize on heavy sites
+    if (isHeavySiteEarly) {
+      if (resizeTimeout) clearTimeout(resizeTimeout);
+      resizeTimeout = window.setTimeout(resizeCanvas, 500);
+    } else {
+      resizeCanvas();
+    }
+  });
+  resizeObserver.observe(document.documentElement);
 
-  // Watch for DOM changes
+  // Use the heavy site flag for mutation debounce
+  const mutationDebounce = isHeavySiteEarly ? 2000 : 500; // 2s for heavy sites, 500ms otherwise
+
+  // DOM mutation observer - only watch for significant changes, heavily debounced
   let mutationTimeout: number | null = null;
+  let pendingMutation = false;
   const mutationObserver = new MutationObserver(() => {
+    // Skip if already pending
+    if (pendingMutation) return;
+    pendingMutation = true;
+
     if (mutationTimeout) clearTimeout(mutationTimeout);
     mutationTimeout = window.setTimeout(() => {
-      if (!isDrawing) redraw();
-    }, 100);
+      pendingMutation = false;
+      if (!isDrawing) {
+        resizeCanvas(); // Check if size changed
+        redraw();
+      }
+    }, mutationDebounce);
   });
+  // Only watch direct children of body, not subtree
   mutationObserver.observe(document.body, {
     childList: true,
-    subtree: true,
+    subtree: false,
   });
+
+  if (isHeavySiteEarly) {
+    console.log('[OpenOverlay] Heavy site detected, using longer debounce');
+  }
 
   // Mode changes
   document.addEventListener('oo:mode', ((e: CustomEvent) => {
@@ -310,9 +342,13 @@ export function initCanvas(): void {
   // Load saved visibility preferences
   loadVisibilityPrefs();
 
-  // Track game mode to avoid canvas undo/clear when in game
+  // Track game mode to avoid canvas undo/clear when in game (build OR play)
   document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
-    isGameMode = e.detail.mode === 'build';
+    isGameMode = e.detail.mode === 'build' || e.detail.mode === 'play';
+    // Force redraw collision canvas when entering any game mode
+    if (e.detail.mode === 'play' || e.detail.mode === 'build') {
+      redraw();
+    }
   }) as EventListener);
 
   // Listen for settings changes to update selected text
@@ -345,21 +381,33 @@ export function initCanvas(): void {
   console.log('[OpenOverlay] Canvas initialized');
 }
 
+let lastCanvasWidth = 0;
+let lastCanvasHeight = 0;
+
 function resizeCanvas(): void {
   if (!canvas || !ctx) return;
 
   const docWidth = Math.max(
-    document.body.scrollWidth,
-    document.body.offsetWidth,
-    document.documentElement.scrollWidth,
-    document.documentElement.offsetWidth
+    document.body.scrollWidth || 0,
+    document.body.offsetWidth || 0,
+    document.documentElement.scrollWidth || 0,
+    document.documentElement.offsetWidth || 0,
+    window.innerWidth || 0
   );
   const docHeight = Math.max(
-    document.body.scrollHeight,
-    document.body.offsetHeight,
-    document.documentElement.scrollHeight,
-    document.documentElement.offsetHeight
+    document.body.scrollHeight || 0,
+    document.body.offsetHeight || 0,
+    document.documentElement.scrollHeight || 0,
+    document.documentElement.offsetHeight || 0,
+    window.innerHeight || 0
   );
+
+  // Skip if size hasn't changed
+  if (docWidth === lastCanvasWidth && docHeight === lastCanvasHeight) {
+    return;
+  }
+  lastCanvasWidth = docWidth;
+  lastCanvasHeight = docHeight;
 
   const dpr = window.devicePixelRatio || 1;
 
@@ -605,6 +653,7 @@ function handleTextPlacement(e: PointerEvent): void {
     opacity: getOpacity(),
     style: getTextStyle(),
     rotation: 0,
+    layer: getLayer(),
   };
 
   items.push(textItem);
@@ -1277,16 +1326,35 @@ function loadVisibilityPrefs(): void {
     const saved = localStorage.getItem('oo_visibility_prefs');
     if (saved) {
       const prefs = JSON.parse(saved);
+      // Validate and apply prefs with safe defaults
       drawingVisibility = {
-        showAll: prefs.showAll ?? true,
-        showMine: prefs.showMine ?? true,
-        showFollowing: prefs.showFollowing ?? false,
-        hiddenUsers: new Set(prefs.hiddenUsers ?? []),
+        showAll: prefs.showAll !== false, // Default to true unless explicitly false
+        showMine: prefs.showMine !== false, // Default to true unless explicitly false
+        showFollowing: prefs.showFollowing === true, // Default to false unless explicitly true
+        hiddenUsers: new Set(Array.isArray(prefs.hiddenUsers) ? prefs.hiddenUsers : []),
       };
-      console.log('[OpenOverlay] Loaded visibility prefs:', drawingVisibility);
+      console.log('[OpenOverlay] Loaded visibility prefs:', {
+        showAll: drawingVisibility.showAll,
+        showMine: drawingVisibility.showMine,
+        showFollowing: drawingVisibility.showFollowing,
+        hiddenUsers: drawingVisibility.hiddenUsers.size,
+      });
+
+      // If everything is hidden, reset to defaults (likely corrupted)
+      if (!drawingVisibility.showAll || !drawingVisibility.showMine) {
+        console.warn('[OpenOverlay] Visibility prefs seem corrupted, resetting to defaults');
+        drawingVisibility = {
+          showAll: true,
+          showMine: true,
+          showFollowing: false,
+          hiddenUsers: new Set(),
+        };
+        localStorage.removeItem('oo_visibility_prefs');
+      }
     }
-  } catch {
-    // Use defaults
+  } catch (e) {
+    console.warn('[OpenOverlay] Failed to load visibility prefs, using defaults:', e);
+    localStorage.removeItem('oo_visibility_prefs');
   }
 }
 
@@ -1420,7 +1488,9 @@ function redraw(): void {
     const saveCtx = ctx;
     ctx = collisionCtx;
 
-    if (item.type === 'shape') {
+    if (item.type === 'text') {
+      drawTextSaved(item as TextItem, rect);
+    } else if (item.type === 'shape') {
       drawShapeSaved(item as ShapeItem, rect);
     } else if (item.type === 'stroke' || !item.type) {
       drawStrokeSaved(item as Stroke, rect);
@@ -1448,7 +1518,6 @@ function redraw(): void {
   }
 
   // Draw normal layer items to main canvas (character collides with these)
-  console.log('[OpenOverlay] Rendering', normalItems.length, 'normal items to collision canvas');
   for (const { item, isOtherUser } of normalItems) {
     renderItemTo(ctx!, item, isOtherUser);
     renderItemCollision(item);
@@ -1683,20 +1752,34 @@ async function clearStrokes(): Promise<void> {
   // Skip if game mode is active - game handles its own clear
   if (isGameMode) return;
 
-  // Only clear current user's items (others' items stay)
-  items = [];
+  // Mode-aware clearing: only clear items for the current mode
+  if (currentMode === 'text') {
+    // In text mode: only clear text items, keep drawings
+    items = items.filter(item => item.type !== 'text');
+    console.log('[OpenOverlay] Cleared text stamps (drawings preserved)');
+  } else {
+    // In draw mode: only clear strokes and shapes, keep text
+    items = items.filter(item => item.type === 'text');
+    console.log('[OpenOverlay] Cleared drawings (text stamps preserved)');
+  }
 
-  // Clear from localStorage
+  // Save remaining items to localStorage
   const pageKey = getPageKey();
-  localStorage.removeItem(`oo_drawing_${pageKey}`);
-
-  // Clear from cloud if logged in
-  if (isLoggedIn()) {
-    await deleteDrawingFromCloud(pageKey);
+  if (items.length > 0) {
+    localStorage.setItem(`oo_drawing_${pageKey}`, JSON.stringify(items));
+    // Update cloud if logged in
+    if (isLoggedIn()) {
+      await saveDrawingToCloud(pageKey, window.location.href, items);
+    }
+  } else {
+    // No items left, remove from storage
+    localStorage.removeItem(`oo_drawing_${pageKey}`);
+    if (isLoggedIn()) {
+      await deleteDrawingFromCloud(pageKey);
+    }
   }
 
   redraw();
-  console.log('[OpenOverlay] Cleared your items (others\' items preserved)');
 }
 
 async function saveDrawing(): Promise<void> {

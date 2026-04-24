@@ -836,7 +836,8 @@ export async function updatePlayerPosition(pageKey: string, state: Omit<RemotePl
     await setDoc(playerRef, {
       ...state,
       odlPlayerId: user.uid,
-      displayName: user.displayName || 'Player',
+      // Use displayName from state (custom screen name) if provided, otherwise fall back
+      displayName: state.displayName || user.displayName || 'Player',
       updatedAt: Date.now(),
     }, { merge: true });
     // Commented out to reduce console noise
@@ -1113,5 +1114,123 @@ export async function submitFeedback(
   } catch (err) {
     console.error('[OpenOverlay] Failed to submit feedback:', err);
     return false;
+  }
+}
+
+// ============ COURSE SYNC (for multiplayer races) ============
+
+export interface CourseData {
+  id: string;
+  name: string;
+  checkpoints: any[];
+  authorId: string;
+  authorName: string;
+  createdAt: number;
+  bestTime?: number;
+}
+
+export interface CombinedCourses {
+  myCourse: CourseData | null;
+  otherCourses: CourseData[];
+}
+
+let courseUnsubscribe: Unsubscribe | null = null;
+
+/**
+ * Save current user's course to cloud (public)
+ */
+export async function saveCourseToCloud(pageKey: string, course: CourseData): Promise<boolean> {
+  const user = getCurrentUser();
+  if (!db || !user) {
+    console.log('[OpenOverlay] Not logged in, skipping course cloud save');
+    return false;
+  }
+
+  try {
+    const courseRef = doc(db, 'pageCourses', pageKey, 'courses', user.uid);
+    await setDoc(courseRef, {
+      ...course,
+      authorId: user.uid,
+      authorName: user.displayName || 'Anonymous',
+      updatedAt: serverTimestamp(),
+    });
+    console.log('[OpenOverlay] Course saved to cloud');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to save course to cloud:', err);
+    return false;
+  }
+}
+
+/**
+ * Delete current user's course from cloud
+ */
+export async function deleteCourseFromCloud(pageKey: string): Promise<boolean> {
+  const user = getCurrentUser();
+  if (!db || !user) return false;
+
+  try {
+    const courseRef = doc(db, 'pageCourses', pageKey, 'courses', user.uid);
+    await deleteDoc(courseRef);
+    console.log('[OpenOverlay] Course deleted from cloud');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to delete course from cloud:', err);
+    return false;
+  }
+}
+
+/**
+ * Subscribe to real-time course updates on a page
+ * Returns all users' courses so everyone can play each other's races
+ */
+export function subscribeToCourses(
+  pageKey: string,
+  callback: (data: CombinedCourses) => void
+): Unsubscribe | null {
+  if (!db) {
+    console.log('[OpenOverlay] Cannot subscribe to courses: Firestore not initialized');
+    return null;
+  }
+
+  // Unsubscribe from previous subscription
+  if (courseUnsubscribe) {
+    courseUnsubscribe();
+  }
+
+  const user = getCurrentUser();
+  const coursesRef = collection(db, 'pageCourses', pageKey, 'courses');
+
+  courseUnsubscribe = onSnapshot(coursesRef, (snapshot) => {
+    let myCourse: CourseData | null = null;
+    const otherCourses: CourseData[] = [];
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as CourseData;
+
+      if (user && docSnap.id === user.uid) {
+        myCourse = data;
+      } else {
+        otherCourses.push(data);
+      }
+    });
+
+    console.log('[OpenOverlay] Course update: mine=', !!myCourse, 'others=', otherCourses.length);
+    callback({ myCourse, otherCourses });
+  }, (error) => {
+    console.error('[OpenOverlay] Course subscription error:', error);
+  });
+
+  console.log('[OpenOverlay] Subscribed to courses on page:', pageKey);
+  return courseUnsubscribe;
+}
+
+/**
+ * Unsubscribe from course updates
+ */
+export function unsubscribeFromCourses(): void {
+  if (courseUnsubscribe) {
+    courseUnsubscribe();
+    courseUnsubscribe = null;
   }
 }

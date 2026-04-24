@@ -731,8 +731,13 @@ function showAnnotateButton(rect: DOMRect, selection: Selection): void {
   btn.className = 'oo-annotate-btn';
   btn.textContent = '+ Annotate';
   btn.style.pointerEvents = 'auto';
-  btn.style.left = `${rect.left + window.scrollX + rect.width / 2 - 50}px`;
-  btn.style.top = `${rect.bottom + window.scrollY + 8}px`;
+  // Position directly below selection (viewport coordinates, host is position:fixed)
+  const btnLeft = Math.max(10, Math.min(rect.left + rect.width / 2 - 50, window.innerWidth - 110));
+  const btnTop = rect.bottom + 2; // Very close to text
+  // If button would go below viewport, position above selection
+  const finalTop = btnTop + 32 > window.innerHeight ? rect.top - 34 : btnTop;
+  btn.style.left = `${btnLeft}px`;
+  btn.style.top = `${finalTop}px`;
 
   btn.onclick = (e) => {
     e.preventDefault();
@@ -766,8 +771,16 @@ function showAnnotationForm(rect: DOMRect, selection: Selection): void {
   const form = document.createElement('div');
   form.className = 'oo-annotation-form';
   form.style.pointerEvents = 'auto';
-  form.style.left = `${Math.max(10, rect.left + window.scrollX - 50)}px`;
-  form.style.top = `${rect.bottom + window.scrollY + 8}px`;
+  // Position directly below selection (viewport coordinates, host is position:fixed)
+  const formLeft = Math.max(10, Math.min(rect.left, window.innerWidth - 320));
+  const formTop = rect.bottom + 4; // Very close to text
+  // If form would go below viewport, position above selection instead
+  const formHeight = 180;
+  const finalTop = formTop + formHeight > window.innerHeight
+    ? Math.max(10, rect.top - formHeight - 4)
+    : formTop;
+  form.style.left = `${formLeft}px`;
+  form.style.top = `${finalTop}px`;
 
   let selectedColor = HIGHLIGHT_COLORS[0];
 
@@ -1118,13 +1131,27 @@ function showInteractivePopup(annotation: Annotation, e: MouseEvent, highlightEl
   const popup = document.createElement('div');
   popup.className = 'oo-popup';
 
-  // Position popup near click, but keep on screen
-  let left = e.pageX - 100;
-  let top = e.pageY + 15;
+  // Position popup near the highlight element (not mouse position)
+  // Use viewport coordinates since host is position:fixed
+  let left: number;
+  let top: number;
+
+  if (highlightEl) {
+    const rect = highlightEl.getBoundingClientRect();
+    left = rect.left;
+    top = rect.bottom + 4; // Just below the highlight
+  } else {
+    left = e.clientX - 100;
+    top = e.clientY + 10;
+  }
 
   // Keep on screen
   if (left < 10) left = 10;
   if (left + 320 > window.innerWidth) left = window.innerWidth - 330;
+  if (top + 200 > window.innerHeight) {
+    // Position above if it would go off bottom
+    top = highlightEl ? highlightEl.getBoundingClientRect().top - 200 : e.clientY - 200;
+  }
 
   popup.style.left = `${left}px`;
   popup.style.top = `${top}px`;
