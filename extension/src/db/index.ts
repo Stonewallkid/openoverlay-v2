@@ -1065,3 +1065,53 @@ export async function endTagGame(pageKey: string): Promise<void> {
     console.error('[OpenOverlay] Failed to end tag game:', err);
   }
 }
+
+// ============ FEEDBACK ============
+
+export interface Feedback {
+  type: 'bug' | 'feature' | 'other';
+  message: string;
+  userId: string | null;
+  userEmail: string | null;
+  userName: string | null;
+  pageUrl: string;
+  userAgent: string;
+  timestamp: Timestamp;
+}
+
+/**
+ * Submit user feedback
+ */
+export async function submitFeedback(
+  type: 'bug' | 'feature' | 'other',
+  message: string
+): Promise<boolean> {
+  if (!db) {
+    console.error('[OpenOverlay] Cannot submit feedback: Firestore not initialized');
+    return false;
+  }
+
+  const user = getCurrentUser();
+
+  try {
+    const feedbackRef = collection(db, 'feedback');
+    const newFeedbackRef = doc(feedbackRef);
+
+    await setDoc(newFeedbackRef, {
+      type,
+      message,
+      userId: user?.uid || null,
+      userEmail: user?.email || null,
+      userName: user?.displayName || null,
+      pageUrl: window.location.href,
+      userAgent: navigator.userAgent,
+      timestamp: serverTimestamp(),
+    });
+
+    console.log('[OpenOverlay] Feedback submitted successfully');
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to submit feedback:', err);
+    return false;
+  }
+}

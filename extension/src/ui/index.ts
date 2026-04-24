@@ -4,7 +4,7 @@
  */
 
 import { signInWithGoogle, signOut, onAuthStateChanged, getCurrentUser } from '@/auth';
-import { getUserProfile, followUser, unfollowUser, isFollowing, type UserProfile } from '@/db';
+import { getUserProfile, followUser, unfollowUser, isFollowing, submitFeedback, type UserProfile } from '@/db';
 import { getBookmarks, type BookmarkedAnnotation } from '@/annotations';
 import type { User } from 'firebase/auth';
 
@@ -820,6 +820,102 @@ const STYLES = `
     gap: 10px;
   }
 
+  .feedback-section {
+    padding: 12px 20px;
+    border-bottom: 1px solid #333;
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(59, 130, 246, 0.1) 100%);
+  }
+
+  .feedback-header {
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .beta-badge {
+    background: linear-gradient(135deg, #22c55e, #3b82f6);
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+  }
+
+  .feedback-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .feedback-select {
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #fff;
+    padding: 8px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .feedback-select:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+
+  .feedback-textarea {
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #fff;
+    padding: 8px 10px;
+    font-size: 13px;
+    resize: none;
+    font-family: inherit;
+  }
+
+  .feedback-textarea:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+
+  .feedback-textarea::placeholder {
+    color: #666;
+  }
+
+  .feedback-submit {
+    background: #22c55e;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .feedback-submit:hover {
+    background: #16a34a;
+  }
+
+  .feedback-submit:disabled {
+    background: #333;
+    color: #666;
+    cursor: not-allowed;
+  }
+
+  .feedback-success {
+    color: #22c55e;
+    font-size: 13px;
+    text-align: center;
+    padding: 10px;
+  }
+
   .profile-settings {
     padding: 12px 20px;
     border-bottom: 1px solid #333;
@@ -1283,6 +1379,24 @@ export function initUI(): void {
           Bookmarks <span class="profile-bookmarks-count" id="bookmarks-count">0</span>
         </div>
         <div id="bookmarks-list"></div>
+      </div>
+      <div class="feedback-section">
+        <div class="feedback-header">
+          <span class="beta-badge">BETA</span>
+          Send Feedback
+        </div>
+        <div class="feedback-form" id="feedback-form">
+          <select id="feedback-type" class="feedback-select">
+            <option value="bug">🐛 Bug Report</option>
+            <option value="feature">💡 Feature Request</option>
+            <option value="other">💬 Other Feedback</option>
+          </select>
+          <textarea id="feedback-text" class="feedback-textarea" placeholder="Describe the issue or suggestion..." rows="3"></textarea>
+          <button class="feedback-submit" id="feedback-submit">Send Feedback</button>
+        </div>
+        <div class="feedback-success" id="feedback-success" style="display:none;">
+          ✓ Thanks for your feedback!
+        </div>
       </div>
       <div class="profile-actions">
         <button class="profile-btn danger" id="signout-btn">Sign Out</button>
@@ -1911,6 +2025,50 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       modal?.classList.remove('show');
     } catch (error) {
       console.error('[OpenOverlay] Sign out failed:', error);
+    }
+  });
+
+  // Feedback form submission
+  const feedbackSubmitBtn = shadowRoot.querySelector('#feedback-submit');
+  feedbackSubmitBtn?.addEventListener('click', async () => {
+    const typeSelect = shadowRoot?.querySelector('#feedback-type') as HTMLSelectElement;
+    const textArea = shadowRoot?.querySelector('#feedback-text') as HTMLTextAreaElement;
+    const form = shadowRoot?.querySelector('#feedback-form') as HTMLElement;
+    const success = shadowRoot?.querySelector('#feedback-success') as HTMLElement;
+
+    const type = typeSelect?.value as 'bug' | 'feature' | 'other';
+    const message = textArea?.value?.trim();
+
+    if (!message) {
+      textArea?.focus();
+      return;
+    }
+
+    // Disable button while submitting
+    const btn = feedbackSubmitBtn as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+
+    const result = await submitFeedback(type, message);
+
+    if (result) {
+      // Show success message
+      form.style.display = 'none';
+      success.style.display = 'block';
+
+      // Reset and show form again after 3 seconds
+      setTimeout(() => {
+        textArea.value = '';
+        typeSelect.selectedIndex = 0;
+        form.style.display = 'block';
+        success.style.display = 'none';
+        btn.disabled = false;
+        btn.textContent = 'Send Feedback';
+      }, 3000);
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Send Feedback';
+      alert('Failed to send feedback. Please try again.');
     }
   });
 
