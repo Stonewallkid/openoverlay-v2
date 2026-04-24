@@ -4,7 +4,7 @@
  */
 
 import { getColor, getSize, getOpacity, getBrush, getEraser, getLayer, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
-import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, isFirestoreAvailable, isLoggedIn } from '@/db';
+import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, subscribeToDrawings, unsubscribeFromDrawings, isFirestoreAvailable, isLoggedIn } from '@/db';
 import { onAuthStateChanged } from '@/auth';
 
 let canvas: HTMLCanvasElement | null = null;
@@ -1566,10 +1566,9 @@ function cancelDrawing(): void {
 async function loadDrawings(): Promise<void> {
   const pageKey = getPageKey();
 
-  // Try to load public drawings from cloud (all users' contributions)
+  // Try to subscribe to real-time drawing updates
   if (isFirestoreAvailable()) {
-    const cloudData = await loadDrawingsFromCloud(pageKey);
-    if (cloudData !== null) {
+    const unsubscribe = subscribeToDrawings(pageKey, (cloudData) => {
       // My items are editable
       items = cloudData.myItems;
       // Others' items are read-only (rendered in background)
@@ -1578,10 +1577,26 @@ async function loadDrawings(): Promise<void> {
       // Update localStorage with my items
       localStorage.setItem(`oo_drawing_${pageKey}`, JSON.stringify(items));
 
-      console.log('[OpenOverlay] Loaded from cloud:', items.length, 'mine,', otherUsersItems.length, 'from others');
+      console.log('[OpenOverlay] Real-time update:', items.length, 'mine,', otherUsersItems.length, 'from others');
       if (cloudData.contributors.length > 0) {
         console.log('[OpenOverlay] Contributors:', cloudData.contributors.map(c => c.displayName).join(', '));
       }
+      redraw(); // This also updates collision canvas
+    });
+
+    if (unsubscribe) {
+      console.log('[OpenOverlay] Subscribed to real-time drawing updates');
+      return;
+    }
+
+    // Fallback to one-time fetch if subscription failed
+    console.log('[OpenOverlay] Real-time subscription failed, trying one-time fetch');
+    const cloudData = await loadDrawingsFromCloud(pageKey);
+    if (cloudData !== null) {
+      items = cloudData.myItems;
+      otherUsersItems = cloudData.otherItems;
+      localStorage.setItem(`oo_drawing_${pageKey}`, JSON.stringify(items));
+      console.log('[OpenOverlay] Loaded from cloud:', items.length, 'mine,', otherUsersItems.length, 'from others');
       redraw();
       return;
     }
@@ -1630,7 +1645,7 @@ function setupAuthListener(): void {
  * Check if there are solid (drawn) pixels at the given position
  * Uses actual canvas pixel data for pixel-perfect collision
  */
-export function checkPixelCollision(x: number, y: number, width: number, height: number): {
+export function checkPixelCollision(x: number, y: number, width: number, height: number, movingRight?: boolean): {
   floor: boolean;
   floorY: number;
   ceiling: boolean;
@@ -1639,10 +1654,12 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
   leftWallX: number;
   rightWall: boolean;
   rightWallX: number;
+  slopeAngle: number; // Angle in degrees (0 = flat, positive = uphill in movement direction)
+  slopeAheadY: number; // Y position of ground ahead of player
 } {
   // Use collision canvas which excludes background items
   if (!collisionCanvas || !collisionCtx) {
-    return { floor: false, floorY: 0, ceiling: false, ceilingY: 0, leftWall: false, leftWallX: 0, rightWall: false, rightWallX: 0 };
+    return { floor: false, floorY: 0, ceiling: false, ceilingY: 0, leftWall: false, leftWallX: 0, rightWall: false, rightWallX: 0, slopeAngle: 0, slopeAheadY: 0 };
   }
 
   const dpr = window.devicePixelRatio || 1;
@@ -1657,6 +1674,8 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
   let leftWallX = 0;
   let rightWall = false;
   let rightWallX = 0;
+  let slopeAngle = 0;
+  let slopeAheadY = 0;
 
   // Use center of player for checks, with some width
   const checkWidth = Math.max(1, Math.floor(width * 0.5 * dpr));
@@ -1691,8 +1710,8 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
           // Found solid pixels - this is the floor surface
           // Convert back to page coordinates
           const surfaceY = scanStartY / dpr + row / dpr;
-          // Only count as floor if surface is at or below feet level
-          if (surfaceY >= feetPageY - 10) {
+          // Only count as floor if surface is at or below feet level (within tolerance)
+          if (surfaceY >= feetPageY - 8) {
             floor = true;
             floorY = surfaceY;
           }
@@ -1734,11 +1753,11 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
         }
       }
     }
-    // WALL CHECKS: Check sides of player body (middle portion, not feet/head)
-    // Check from 20% down from top to 80% down (the body, not head or feet)
-    const wallCheckTop = Math.floor((y + height * 0.2) * dpr);
-    const wallCheckHeight = Math.floor(height * 0.5 * dpr);
-    const wallScanWidth = Math.floor(15 * dpr); // Check 15px to each side
+    // WALL CHECKS: Check sides of player body (full height from head to near feet)
+    // Check from top of player to 90% down (includes head, excludes feet for slope walking)
+    const wallCheckTop = Math.floor(y * dpr);
+    const wallCheckHeight = Math.floor(height * 0.85 * dpr);
+    const wallScanWidth = Math.floor(10 * dpr); // Check 10px to each side
 
     // LEFT WALL CHECK
     const leftScanX = Math.max(0, Math.floor(x * dpr) - wallScanWidth);
@@ -1785,11 +1804,42 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
         }
       }
     }
+    // SLOPE DETECTION: Sample ground ahead to calculate slope angle
+    // This helps determine if we're approaching a walkable slope or a wall
+    const feetY = y + height;
+    const aheadDistance = 20; // Check 20px ahead
+    const aheadX = movingRight !== false ? x + width + aheadDistance : x - aheadDistance;
+    const sampleX = Math.floor(aheadX * dpr);
+    const sampleStartY = Math.floor((feetY - 30) * dpr); // Start 30px above feet
+    const sampleHeight = Math.floor(50 * dpr); // Scan 50px range
+
+    if (sampleX >= 0 && sampleX < collisionCanvas.width &&
+        sampleStartY >= 0 && sampleStartY + sampleHeight <= collisionCanvas.height) {
+
+      const slopeData = collisionCtx.getImageData(sampleX, sampleStartY, 1, sampleHeight);
+
+      // Find the first solid pixel from top (ground level ahead)
+      for (let row = 0; row < sampleHeight; row++) {
+        const alpha = slopeData.data[row * 4 + 3];
+        if (alpha > 30) {
+          slopeAheadY = sampleStartY / dpr + row / dpr;
+
+          // Calculate slope angle based on height difference
+          const currentGroundY = floor ? floorY : feetY;
+          const heightDiff = currentGroundY - slopeAheadY; // Positive = uphill
+          const horizontalDist = aheadDistance;
+
+          // Angle in degrees (atan2 gives radians)
+          slopeAngle = Math.atan2(heightDiff, horizontalDist) * (180 / Math.PI);
+          break;
+        }
+      }
+    }
   } catch (e) {
     // getImageData can fail
   }
 
-  return { floor, floorY, ceiling, ceilingY, leftWall, leftWallX, rightWall, rightWallX };
+  return { floor, floorY, ceiling, ceilingY, leftWall, leftWallX, rightWall, rightWallX, slopeAngle, slopeAheadY };
 }
 
 // Legacy function for compatibility - now returns empty since we use pixel collision

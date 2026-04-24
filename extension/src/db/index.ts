@@ -474,6 +474,80 @@ export async function deleteDrawingFromCloud(pageKey: string): Promise<boolean> 
   }
 }
 
+// Store unsubscribe function for drawings
+let drawingUnsubscribe: Unsubscribe | null = null;
+
+/**
+ * Subscribe to real-time drawing updates on a page
+ */
+export function subscribeToDrawings(
+  pageKey: string,
+  callback: (data: CombinedDrawings) => void
+): Unsubscribe | null {
+  if (!db) {
+    console.log('[OpenOverlay] Cannot subscribe to drawings: Firestore not initialized');
+    return null;
+  }
+
+  // Unsubscribe from previous subscription
+  if (drawingUnsubscribe) {
+    drawingUnsubscribe();
+  }
+
+  const user = getCurrentUser();
+  const contributorsRef = collection(db, 'pageDrawings', pageKey, 'contributors');
+
+  drawingUnsubscribe = onSnapshot(contributorsRef, (snapshot) => {
+    const myItems: any[] = [];
+    const otherItems: any[] = [];
+    const contributors: { userId: string; displayName: string; photoURL: string }[] = [];
+
+    snapshot.docs.forEach(docSnap => {
+      const data = docSnap.data() as PageContribution;
+      const items = JSON.parse(data.items || '[]');
+
+      contributors.push({
+        userId: data.userId,
+        displayName: data.userDisplayName,
+        photoURL: data.userPhotoURL,
+      });
+
+      if (user && data.userId === user.uid) {
+        // Current user's items
+        myItems.push(...items);
+      } else {
+        // Other users' items - tag them with owner info
+        items.forEach((item: any) => {
+          otherItems.push({
+            ...item,
+            _ownerId: data.userId,
+            _ownerName: data.userDisplayName,
+            _readOnly: true,
+          });
+        });
+      }
+    });
+
+    console.log('[OpenOverlay] Real-time drawing update:', myItems.length, 'mine,', otherItems.length, 'from others');
+    callback({ myItems, otherItems, contributors });
+  }, (error) => {
+    console.error('[OpenOverlay] Drawing subscription error:', error);
+  });
+
+  console.log('[OpenOverlay] Subscribed to drawings on page:', pageKey);
+  return drawingUnsubscribe;
+}
+
+/**
+ * Unsubscribe from drawing updates
+ */
+export function unsubscribeFromDrawings(): void {
+  if (drawingUnsubscribe) {
+    drawingUnsubscribe();
+    drawingUnsubscribe = null;
+  }
+}
+
 /**
  * Check if Firestore is available
  */
@@ -740,6 +814,8 @@ export interface RemotePlayer {
   // Tag game fields
   isIt?: boolean;
   tagCooldownUntil?: number;
+  taggedPlayerId?: string; // ID of player we just tagged (explicit notification)
+  taggedAt?: number; // When we tagged them
 }
 
 let playerSyncUnsubscribe: Unsubscribe | null = null;

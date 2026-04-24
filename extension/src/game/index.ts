@@ -89,17 +89,46 @@ interface BloodSplat {
 let bloodSplats: BloodSplat[] = [];
 
 // Multiplayer state
-let otherPlayers: Map<string, RemotePlayer> = new Map();
+let otherPlayers: Map<string, RemotePlayer> = new Map(); // Target positions from sync
+// Extrapolated display state: tracks position, velocity, and when we last received sync
+let displayPlayers: Map<string, {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  lastSyncTime: number;
+  targetX: number;
+  targetY: number;
+}> = new Map();
 let lastSyncTime = 0;
 let lastSyncX = 0;
 let lastSyncY = 0;
-const SYNC_INTERVAL = 500; // Sync every 500ms (2 updates/sec) to avoid Firestore quota
+const SYNC_INTERVAL = 80; // Sync every 80ms (~12 updates/sec) for minimal delay
 
 // Tag game state
 let isTagMode = false;
 let tagGameState: TagGameState | null = null;
 let localTagCooldownUntil = 0;
-const TAG_COOLDOWN = 2000; // 2 seconds cooldown after being tagged
+let localIsIt = false; // Local fallback for when Firebase sync fails
+let lastTaggedByPlayerId: string | null = null; // Track who tagged us to prevent tiebreaker issues
+let pendingTaggedPlayerId: string | null = null; // Player we just tagged (explicit notification)
+let pendingTaggedAt: number = 0; // When we tagged them
+const TAG_COOLDOWN = 3000; // 3 seconds cooldown - needs to be longer than sync latency
+const TAG_NOTIFICATION_DURATION = 5000; // How long to keep taggedPlayerId in sync
+
+// Helper to check if current player is "it" (uses Firebase state or local fallback)
+function isCurrentUserIt(): boolean {
+  const currentUser = getCurrentUser();
+  if (!currentUser) return false;
+
+  // Prefer Firebase state if available
+  if (tagGameState?.gameActive) {
+    return tagGameState.itPlayerId === currentUser.uid;
+  }
+
+  // Fallback to local state
+  return localIsIt;
+}
 
 // Course elements
 interface Checkpoint {
@@ -278,12 +307,12 @@ export function initGame(): void {
   // Listen for tag game toggle
   document.addEventListener('oo:toggletag', () => {
     console.log('[OpenOverlay] Tag toggle requested, gameMode:', gameMode);
-    if (gameMode === 'play') {
-      toggleTagMode();
-    } else {
-      console.log('[OpenOverlay] Cannot start tag - not in play mode');
-      showNotification('Enter play mode first', '🚶 or 🏃', 2000);
+    if (gameMode !== 'play') {
+      // Auto-switch to play mode (explore) when starting tag
+      console.log('[OpenOverlay] Auto-switching to play mode for tag');
+      setGameMode('play', 'explore');
     }
+    toggleTagMode();
   });
 
   // Mouse events for building
@@ -377,6 +406,74 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
         players.forEach((p, id) => {
           console.log('[OpenOverlay] Player', id, 'at', p.x, p.y);
         });
+
+        // Check if someone else is "it" in tag mode - update our state
+        if (isTagMode) {
+          const currentUser = getCurrentUser();
+          const now = Date.now();
+          let itPlayerId: string | null = null;
+
+          // First, check if any player explicitly tagged US via taggedPlayerId
+          for (const [id, rp] of players) {
+            if (rp.taggedPlayerId === currentUser?.uid && rp.taggedAt && now - rp.taggedAt < TAG_NOTIFICATION_DURATION) {
+              // We were explicitly tagged by this player!
+              if (!localIsIt && now > localTagCooldownUntil) {
+                console.log('[OpenOverlay] EXPLICITLY TAGGED by:', id, 'via taggedPlayerId');
+                localIsIt = true;
+                lastTaggedByPlayerId = id;
+                localTagCooldownUntil = now + TAG_COOLDOWN;
+                showNotification("You're IT!", 'Tag someone!', 2000);
+                document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
+                  detail: { isTagMode: true, isIt: true, gameActive: true }
+                }));
+              }
+            }
+          }
+
+          for (const [id, rp] of players) {
+            console.log('[OpenOverlay] Checking player', id, 'isIt:', rp.isIt);
+            if (rp.isIt) {
+              itPlayerId = id;
+              console.log('[OpenOverlay] Found IT player in sync:', rp.displayName, 'id:', id);
+              break;
+            }
+            // Clear lastTaggedByPlayerId if that player now shows isIt: false (sync caught up)
+            if (id === lastTaggedByPlayerId && !rp.isIt) {
+              console.log('[OpenOverlay] Clearing lastTaggedByPlayerId - sync caught up');
+              lastTaggedByPlayerId = null;
+            }
+          }
+
+          // If someone else is "it" and we think we're "it", use tiebreaker
+          // BUT don't apply tiebreaker if:
+          // 1. We're in cooldown (we were just tagged or just tagged someone)
+          // 2. The other IT player is the one who just tagged us (stale sync)
+          const inTagCooldown = now < localTagCooldownUntil;
+          const wasTaggedByThisPlayer = itPlayerId === lastTaggedByPlayerId;
+
+          if (itPlayerId && localIsIt && currentUser && !inTagCooldown && !wasTaggedByThisPlayer) {
+            // Tiebreaker: lower user ID wins (only when not in cooldown and not tagged by them)
+            if (itPlayerId < currentUser.uid) {
+              console.log('[OpenOverlay] Tiebreaker: other player wins (lower ID), giving up IT');
+              localIsIt = false;
+              lastTaggedByPlayerId = null; // Clear since we're giving up IT
+              document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
+                detail: { isTagMode: true, isIt: false, gameActive: true }
+              }));
+            } else {
+              console.log('[OpenOverlay] Tiebreaker: we win (lower ID), keeping IT');
+            }
+          } else if (itPlayerId && localIsIt && inTagCooldown) {
+            // In cooldown - skip tiebreaker to let tag transfer settle
+            console.log('[OpenOverlay] Skipping tiebreaker - in tag cooldown');
+          } else if (itPlayerId && localIsIt && wasTaggedByThisPlayer) {
+            // This player tagged us - their stale isIt:true is expected, skip tiebreaker
+            console.log('[OpenOverlay] Skipping tiebreaker - was tagged by this player (stale sync)');
+          } else if (itPlayerId && !localIsIt) {
+            // Someone else is IT and we're not - that's fine, no change needed
+            console.log('[OpenOverlay] Other player is IT, we are not');
+          }
+        }
       }
     });
 
@@ -385,12 +482,22 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
       const prevState = tagGameState;
       tagGameState = state;
       console.log('[OpenOverlay] Tag game state changed:', state);
+
+      // Dispatch event to update UI
+      const currentUser = getCurrentUser();
+      const isIt = state?.itPlayerId === currentUser?.uid;
+      document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
+        detail: { isTagMode, isIt, gameActive: state?.gameActive ?? false }
+      }));
+
       if (state?.gameActive) {
         console.log('[OpenOverlay] Tag game active, "it" is:', state.itPlayerId);
         if (prevState?.itPlayerId !== state.itPlayerId) {
-          const currentUser = getCurrentUser();
-          if (state.itPlayerId === currentUser?.uid) {
+          if (isIt) {
             showNotification("You're IT!", 'Tag someone!', 2000);
+          } else if (prevState?.itPlayerId === currentUser?.uid) {
+            // We were just tagged - show notification
+            showNotification("You're not IT!", 'Run away!', 2000);
           }
         }
       }
@@ -405,7 +512,7 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
     // Start game loop
     startGameLoop();
   } else if (mode === 'build') {
-    // Keep game loop running but hide player (will still render checkpoints)
+    // Keep game loop running, keep player visible for character editing
     // Clean up modal/leaderboard/restart button
     showingFinishModal = false;
     showLeaderboard = false;
@@ -414,13 +521,13 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
     isCountingDown = false;
     playerFrozen = false;
     notification = null;
-
-    // Unsubscribe from multiplayer and remove self
-    unsubscribeFromPlayers();
-    unsubscribeFromTagGame();
-    removePlayer(getPageKey());
-    otherPlayers.clear();
+    // Keep multiplayer connected so other players stay visible
+    // Tag mode is disabled in build mode though
     isTagMode = false;
+    localIsIt = false;
+    lastTaggedByPlayerId = null;
+    pendingTaggedPlayerId = null;
+    pendingTaggedAt = 0;
     tagGameState = null;
   } else {
     // Mode is 'none' - keep player visible, keep game running
@@ -437,7 +544,12 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
     unsubscribeFromTagGame();
     removePlayer(getPageKey());
     otherPlayers.clear();
+    displayPlayers.clear();
     isTagMode = false;
+    localIsIt = false;
+    lastTaggedByPlayerId = null;
+    pendingTaggedPlayerId = null;
+    pendingTaggedAt = 0;
     tagGameState = null;
   }
 
@@ -468,7 +580,7 @@ function gameLoop(currentTime: number): void {
   update(deltaTime);
   render();
 
-  if (gameMode === 'play') {
+  if (gameMode === 'play' || gameMode === 'build') {
     animationId = requestAnimationFrame(gameLoop);
   } else {
     // Clear animationId when loop stops naturally
@@ -737,8 +849,85 @@ function handleDeath(): void {
 // Track jump key state for double jump
 let jumpKeyWasPressed = false;
 
+/**
+ * Update remote player display positions using velocity extrapolation.
+ * This predicts where players are NOW based on their last known velocity.
+ */
+function updateRemotePlayerPositions(): void {
+  const now = performance.now();
+
+  for (const [playerId, sync] of otherPlayers) {
+    let display = displayPlayers.get(playerId);
+
+    if (!display) {
+      // Initialize new player
+      display = {
+        x: sync.x,
+        y: sync.y,
+        vx: sync.vx,
+        vy: sync.vy,
+        lastSyncTime: now,
+        targetX: sync.x,
+        targetY: sync.y,
+      };
+      displayPlayers.set(playerId, display);
+      continue;
+    }
+
+    // Check if we got new sync data (position changed significantly or velocity changed)
+    const posChanged = Math.abs(sync.x - display.targetX) > 0.1 || Math.abs(sync.y - display.targetY) > 0.1;
+    const velChanged = Math.abs(sync.vx - display.vx) > 0.1 || Math.abs(sync.vy - display.vy) > 0.1;
+
+    if (posChanged || velChanged) {
+      // New sync data received - update velocity immediately
+      display.vx = sync.vx;
+      display.vy = sync.vy;
+      display.lastSyncTime = now;
+
+      // Predict where player is NOW by adding velocity * estimated network delay
+      // This compensates for the ~80ms sync interval + network latency
+      const networkCompensation = 5; // frames worth of prediction (~80ms at 60fps)
+      display.targetX = sync.x + sync.vx * networkCompensation;
+      display.targetY = sync.y + sync.vy * networkCompensation;
+    }
+
+    // Extrapolate position based on velocity (pixels per frame at 60fps)
+    // This makes the player continue moving smoothly between syncs
+    display.x += display.vx * 0.5;
+    display.y += display.vy * 0.5;
+
+    // Gradually correct towards the predicted position to prevent drift
+    const correctionSpeed = 0.12;
+    const errorX = display.targetX - display.x;
+    const errorY = display.targetY - display.y;
+
+    // Only correct if there's significant error
+    if (Math.abs(errorX) > 1 || Math.abs(errorY) > 1) {
+      display.x += errorX * correctionSpeed;
+      display.y += errorY * correctionSpeed;
+    }
+
+    // If way off (teleport/respawn), snap immediately
+    const totalError = Math.sqrt(errorX * errorX + errorY * errorY);
+    if (totalError > 150) {
+      display.x = sync.x;
+      display.y = sync.y;
+    }
+  }
+
+  // Clean up disconnected players
+  for (const playerId of displayPlayers.keys()) {
+    if (!otherPlayers.has(playerId)) {
+      displayPlayers.delete(playerId);
+    }
+  }
+}
+
 function update(dt: number): void {
   if (gameMode !== 'play') return;
+
+  // Update remote player positions using velocity extrapolation
+  updateRemotePlayerPositions();
 
   // Handle countdown
   if (isCountingDown) {
@@ -862,18 +1051,84 @@ function update(dt: number): void {
   // Apply gravity
   player.vy += GRAVITY * dt;
 
-  // Move player
-  player.x += player.vx * dt;
-  player.y += player.vy * dt;
-
   // --- PIXEL-PERFECT COLLISION DETECTION ---
 
-  // Check collision at player position
+  // Max walkable slope angle (degrees) - steeper than this is a wall
+  const MAX_SLOPE_ANGLE = 50;
+
+  // PRE-MOVEMENT COLLISION CHECK
+  // Check if there's a wall/steep slope ahead BEFORE moving
+  // This prevents clipping through at high speeds
+  const intendedX = player.x + player.vx * dt;
+  const intendedY = player.y + player.vy * dt;
+  const movingRight = player.vx >= 0;
+
+  // Check collision at intended position
+  const preCollision = checkPixelCollision(
+    intendedX,
+    player.y, // Check at current Y first (horizontal movement)
+    player.width,
+    player.height,
+    movingRight
+  );
+
+  // If hitting a wall horizontally, don't move X
+  let canMoveX = true;
+  if (player.vx < 0 && preCollision.leftWall) {
+    player.x = preCollision.leftWallX;
+    player.vx = 0;
+    canMoveX = false;
+  }
+  if (player.vx > 0 && preCollision.rightWall) {
+    player.x = preCollision.rightWallX - player.width;
+    player.vx = 0;
+    canMoveX = false;
+  }
+
+  // Check for steep slope ahead before moving
+  if (canMoveX && Math.abs(player.vx) > 0.5 && preCollision.slopeAheadY > 0) {
+    if (preCollision.slopeAngle > MAX_SLOPE_ANGLE) {
+      // Steep slope ahead - stop horizontal movement
+      player.vx = 0;
+      canMoveX = false;
+    }
+  }
+
+  // PRE-MOVEMENT CEILING CHECK (when jumping up)
+  // This prevents jumping through walls/ceilings from below
+  let canMoveY = true;
+  if (player.vy < 0) {
+    // Check collision at intended Y position
+    const ceilingCheck = checkPixelCollision(
+      player.x,
+      intendedY,
+      player.width,
+      player.height,
+      movingRight
+    );
+    if (ceilingCheck.ceiling) {
+      // Hit ceiling - stop at ceiling and reverse velocity
+      player.y = ceilingCheck.ceilingY;
+      player.vy = 1; // Start falling
+      canMoveY = false;
+    }
+  }
+
+  // Apply movement (may be reduced by collision checks above)
+  if (canMoveX) {
+    player.x += player.vx * dt;
+  }
+  if (canMoveY) {
+    player.y += player.vy * dt;
+  }
+
+  // Check collision at NEW player position (after movement)
   const collision = checkPixelCollision(
     player.x,
     player.y,
     player.width,
-    player.height
+    player.height,
+    movingRight
   );
 
   // Ceiling collision (when jumping up)
@@ -882,30 +1137,78 @@ function update(dt: number): void {
     player.vy = 1; // Start falling
   }
 
-  // Wall collision (horizontal)
-  if (player.vx < 0 && collision.leftWall) {
-    // Moving left into a wall
+  // Wall collision - check if player actually overlaps with detected walls
+  // leftWallX = right edge of wall to the left, rightWallX = left edge of wall to the right
+  const leftOverlap = collision.leftWall && player.x < collision.leftWallX;
+  const rightOverlap = collision.rightWall && (player.x + player.width) > collision.rightWallX;
+
+  if (leftOverlap && rightOverlap) {
+    // Stuck between two walls - push out to the side with less overlap
+    const leftPush = collision.leftWallX - player.x;
+    const rightPush = (player.x + player.width) - collision.rightWallX;
+    if (leftPush < rightPush) {
+      player.x = collision.leftWallX;
+    } else {
+      player.x = collision.rightWallX - player.width;
+    }
+    player.vx = 0;
+  } else if (leftOverlap) {
     player.x = collision.leftWallX;
     player.vx = 0;
-  }
-  if (player.vx > 0 && collision.rightWall) {
-    // Moving right into a wall
+  } else if (rightOverlap) {
     player.x = collision.rightWallX - player.width;
     player.vx = 0;
   }
 
-  // Floor collision (when falling down)
+  // Floor collision (when falling down or standing)
   player.onGround = false;
 
   if (player.vy >= 0 && collision.floor) {
-    // Check if just landed (wasn't on ground before)
-    if (!wasOnGround && Math.abs(player.vx) > 0.5) {
-      landingSlideFrames = 8; // Slide for 8 frames
+    const targetY = collision.floorY - player.height;
+    const heightDiff = player.y - targetY; // Positive = floor is above current position
+
+    // Allow snapping up to floors based on fall speed:
+    // - Fast falling (vy > 5): only snap to floors at or below current position
+    // - Slow/walking (vy <= 5): allow snapping up to 8px (for slope walking)
+    const isFallingFast = player.vy > 5;
+    const maxSnapUp = isFallingFast ? 0 : 8;
+
+    if (heightDiff <= maxSnapUp) {
+      // Check if just landed (wasn't on ground before)
+      if (!wasOnGround && Math.abs(player.vx) > 0.5) {
+        landingSlideFrames = 8; // Slide for 8 frames
+      }
+      player.y = targetY;
+      player.vy = 0;
+      player.onGround = true;
+      player.jumpsRemaining = player.maxJumps;
     }
-    player.y = collision.floorY - player.height;
-    player.vy = 0;
-    player.onGround = true;
-    player.jumpsRemaining = player.maxJumps;
+  }
+
+  // SLOPE CLIMBING: Simple gradual step-up when on ground
+  // Only step up 1-2 pixels at a time to prevent teleportation
+  if (player.onGround && Math.abs(player.vx) > 0.5) {
+    const speed = Math.abs(player.vx);
+    // Step up amount scales with speed but max 3px per frame
+    const maxStepUp = Math.min(3, Math.ceil(speed * 0.3));
+
+    // Check collision at a slightly higher position
+    for (let stepUp = 1; stepUp <= maxStepUp; stepUp++) {
+      const testY = player.y - stepUp;
+      const stepCollision = checkPixelCollision(player.x, testY, player.width, player.height, movingRight);
+
+      // If there's floor at this height and no walls, step up
+      if (stepCollision.floor && !stepCollision.leftWall && !stepCollision.rightWall) {
+        const newY = stepCollision.floorY - player.height;
+        const heightDiff = player.y - newY;
+
+        // Only step up if it's a small step (not teleporting)
+        if (heightDiff > 0 && heightDiff <= maxStepUp) {
+          player.y = newY;
+          break;
+        }
+      }
+    }
   }
 
   // Track ground state for next frame
@@ -936,7 +1239,7 @@ function update(dt: number): void {
   checkGameElements();
 
   // Check tag collisions with other players
-  if (isTagMode && tagGameState?.gameActive) {
+  if (isTagMode) {
     checkPlayerTagCollision();
   }
 
@@ -968,8 +1271,21 @@ function syncPlayerToCloud(): void {
   const pageKey = getPageKey();
   const currentUser = getCurrentUser();
 
-  // Sync feet position (y + height) for consistent ground level across different machines
-  updatePlayerPosition(pageKey, {
+  const syncIsIt = isTagMode && isCurrentUserIt();
+  if (isTagMode) {
+    console.log('[OpenOverlay] Syncing player with isIt:', syncIsIt, 'isTagMode:', isTagMode, 'localIsIt:', localIsIt);
+  }
+
+  const now = Date.now();
+
+  // Clear expired tag notification
+  if (pendingTaggedPlayerId && now - pendingTaggedAt > TAG_NOTIFICATION_DURATION) {
+    pendingTaggedPlayerId = null;
+    pendingTaggedAt = 0;
+  }
+
+  // Build sync data object
+  const syncData: any = {
     x: player.x,
     y: player.y + player.height, // Send feet Y position
     vx: player.vx,
@@ -983,11 +1299,21 @@ function syncPlayerToCloud(): void {
     playerAccessory: playerAccessory,
     isGirlMode: isGirlMode,
     displayName: currentUser?.displayName || '',
-    updatedAt: Date.now(),
-    // Tag game state
-    isIt: isTagMode && tagGameState?.itPlayerId === currentUser?.uid,
+    updatedAt: now,
+    // Tag game state (use helper for fallback)
+    isIt: isTagMode && isCurrentUserIt(),
     tagCooldownUntil: localTagCooldownUntil,
-  });
+  };
+
+  // Only include tag notification fields if we actually tagged someone
+  // (Firestore doesn't accept undefined values)
+  if (pendingTaggedPlayerId) {
+    syncData.taggedPlayerId = pendingTaggedPlayerId;
+    syncData.taggedAt = pendingTaggedAt;
+  }
+
+  // Sync feet position (y + height) for consistent ground level across different machines
+  updatePlayerPosition(pageKey, syncData);
 }
 
 function checkCheckpoints(): void {
@@ -1108,7 +1434,7 @@ function checkGameElements(): void {
  * Check for tag collisions with other players
  */
 function checkPlayerTagCollision(): void {
-  if (!tagGameState?.gameActive) return;
+  if (!isTagMode) return;
 
   const currentUser = getCurrentUser();
   if (!currentUser) return;
@@ -1120,36 +1446,70 @@ function checkPlayerTagCollision(): void {
   const playerCenterX = player.x + player.width / 2;
   const playerFeetY = player.y + player.height;
 
+  // Check if WE are "it" (use helper that handles fallback)
+  const isWeIt = isCurrentUserIt();
+
   for (const [playerId, remote] of otherPlayers) {
+    // Use interpolated position for collision detection (matches visual position)
+    const interpolated = displayPlayers.get(playerId);
+    const remoteX = interpolated ? interpolated.x : remote.x;
+    const remoteY = interpolated ? interpolated.y : remote.y;
+
     // Calculate distance between players (use feet Y positions)
-    const dx = playerCenterX - remote.x;
-    const dy = playerFeetY - remote.y;
+    const dx = playerCenterX - remoteX;
+    const dy = playerFeetY - remoteY;
     const distance = Math.sqrt(dx * dx + dy * dy);
 
     // Touch threshold - players are ~30px wide
-    if (distance < 60) { // Increased for debugging
-      const isWeIt = tagGameState.itPlayerId === currentUser.uid;
+    if (distance < 40) {
       const offCooldown = now > localTagCooldownUntil;
       const targetOffCooldown = !remote.tagCooldownUntil || now > remote.tagCooldownUntil;
 
-      // Debug log when close to another player
-      if (Math.random() < 0.05) { // 5% to avoid spam
-        console.log('[OpenOverlay] Near player:', {
-          distance: Math.round(distance),
-          isWeIt,
-          itPlayerId: tagGameState.itPlayerId,
-          ourId: currentUser.uid,
-          offCooldown,
-          targetOffCooldown,
-        });
-      }
-
-      if (distance < 40 && isWeIt && offCooldown && targetOffCooldown) {
+      if (isWeIt && offCooldown && targetOffCooldown) {
         // Tag them!
         console.log('[OpenOverlay] TAGGING player:', playerId);
-        tagPlayer(pageKey, playerId);
+
+        // Update local state immediately
+        localIsIt = false;
+
+        // Set explicit tag notification - this will be synced to tell the other player they were tagged
+        pendingTaggedPlayerId = playerId;
+        pendingTaggedAt = now;
+
+        // Try to update Firebase (may fail due to permissions)
+        tagPlayer(pageKey, playerId).catch(() => {
+          console.log('[OpenOverlay] Firebase tag update failed, using local state');
+        });
+
         localTagCooldownUntil = now + TAG_COOLDOWN;
         showNotification('Tagged!', remote.displayName || 'Player', 1500);
+
+        // Dispatch state change event
+        document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
+          detail: { isTagMode: true, isIt: false, gameActive: true }
+        }));
+
+        // Force immediate sync to notify the tagged player
+        syncPlayerToCloud();
+      }
+
+      // Check if THEY tagged US (they are "it" and touched us)
+      // Also check that THEY are not in cooldown - prevents passive re-tagging after cooldown expires
+      const remoteOffCooldown = !remote.tagCooldownUntil || now > remote.tagCooldownUntil;
+      if (!isWeIt && remote.isIt && offCooldown && remoteOffCooldown) {
+        // We got tagged!
+        console.log('[OpenOverlay] GOT TAGGED by:', playerId);
+
+        // Update local state - we are now "it"
+        localIsIt = true;
+        localTagCooldownUntil = now + TAG_COOLDOWN;
+        lastTaggedByPlayerId = playerId; // Track who tagged us
+        showNotification("You're IT!", 'Tag someone!', 2000);
+
+        // Dispatch state change event
+        document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
+          detail: { isTagMode: true, isIt: true, gameActive: true }
+        }));
       }
     }
   }
@@ -1168,13 +1528,15 @@ function render(): void {
     drawCheckpoint(checkpoint);
   }
 
-  // Draw player (only in play mode)
-  if (gameMode === 'play') {
+  // Draw player (in play mode and build mode - so characters stay visible while editing)
+  if (gameMode === 'play' || gameMode === 'build') {
     // Draw other players first (behind local player)
     drawOtherPlayers();
     drawPlayer();
-    drawHUD();
-    // Note: Leaderboard and finish modal replaced by game popup
+    // Only show HUD in play mode
+    if (gameMode === 'play') {
+      drawHUD();
+    }
   }
 
   // Draw build mode indicator
@@ -1513,14 +1875,18 @@ function drawOtherPlayers(): void {
   if (!gameCtx) return;
 
   for (const [playerId, remotePlayer] of otherPlayers) {
-    // Debug: log remote player data periodically
-    if (Math.random() < 0.01) { // 1% chance to avoid spam
-      console.log('[OpenOverlay] Remote player:', playerId, {
+    // Debug: log remote player data once per player
+    const logKey = `logged_${playerId}`;
+    if (!(window as any)[logKey]) {
+      (window as any)[logKey] = true;
+      console.log('[OpenOverlay] Remote player data:', playerId, JSON.stringify({
         isGirlMode: remotePlayer.isGirlMode,
         playerHat: remotePlayer.playerHat,
         playerColor: remotePlayer.playerColor,
         displayName: remotePlayer.displayName,
-      });
+        playerAccessory: remotePlayer.playerAccessory,
+        isIt: remotePlayer.isIt,
+      }));
     }
     drawRemotePlayer(playerId, remotePlayer);
   }
@@ -1533,11 +1899,16 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
   // Skip if player is dead
   if (rp.isDead) return;
 
+  // Use interpolated position for smooth movement
+  const interpolated = displayPlayers.get(playerId);
+  const displayX = interpolated ? interpolated.x : rp.x;
+  const displayY = interpolated ? interpolated.y : rp.y;
+
   const w = 30;
   const h = 50;
-  const x = rp.x;
-  // rp.y is the feet position, so subtract height to get top position
-  const y = rp.y - h;
+  const x = displayX;
+  // displayY is the feet position, so subtract height to get top position
+  const y = displayY - h;
 
   gameCtx.save();
 
@@ -1578,48 +1949,140 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
   const animFrame = rp.animFrame || 0;
 
   if (rp.isGirlMode) {
-    // Girl character - simplified version
-    // Hair
+    // === GIRL CHARACTER - same detailed style as local player ===
+
+    // 1. Draw hair first (back layer) - smooth rounded bob
     gameCtx.fillStyle = color;
     gameCtx.beginPath();
-    gameCtx.arc(centerX, headY, headRadius + 3, 0, Math.PI * 2);
+    // Start at bottom left of hair
+    gameCtx.moveTo(centerX - headRadius - 2, headY + 8);
+    // Left side going up
+    gameCtx.lineTo(centerX - headRadius - 1, headY - 2);
+    // Curve over the top of head
+    gameCtx.quadraticCurveTo(centerX - headRadius + 2, headY - headRadius - 4, centerX, headY - headRadius - 3);
+    gameCtx.quadraticCurveTo(centerX + headRadius - 2, headY - headRadius - 4, centerX + headRadius + 1, headY - 2);
+    // Right side going down
+    gameCtx.lineTo(centerX + headRadius + 2, headY + 8);
+    // Curve back under
+    gameCtx.quadraticCurveTo(centerX + headRadius, headY + 10, centerX + headRadius - 2, headY + 10);
+    gameCtx.lineTo(centerX - headRadius + 2, headY + 10);
+    gameCtx.quadraticCurveTo(centerX - headRadius, headY + 10, centerX - headRadius - 2, headY + 8);
+    gameCtx.closePath();
     gameCtx.fill();
 
-    // Face
+    // 2. Draw face circle (white/light filled)
     gameCtx.fillStyle = '#fff';
     gameCtx.beginPath();
     gameCtx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
     gameCtx.fill();
 
-    // Eyes
+    // 3. Draw bangs on top of face
     gameCtx.fillStyle = color;
     gameCtx.beginPath();
-    gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
-    gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
-    gameCtx.fill();
-
-    // Body (dress shape)
-    gameCtx.fillStyle = color;
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyStartY);
-    gameCtx.lineTo(centerX - 10, bodyEndY + 4);
-    gameCtx.lineTo(centerX + 10, bodyEndY + 4);
+    gameCtx.moveTo(centerX - headRadius + 2, headY - 2);
+    gameCtx.quadraticCurveTo(centerX - 2, headY - headRadius - 2, centerX, headY - headRadius + 1);
+    gameCtx.quadraticCurveTo(centerX + 2, headY - headRadius - 2, centerX + headRadius - 2, headY - 2);
+    gameCtx.quadraticCurveTo(centerX, headY - 1, centerX - headRadius + 2, headY - 2);
     gameCtx.closePath();
     gameCtx.fill();
 
+    // 4. Face features (on white face)
+    gameCtx.fillStyle = color;
+    if (isMoving) {
+      // Running: single side eye + small mouth dash
+      gameCtx.beginPath();
+      gameCtx.arc(centerX + 2, headY, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      // Mouth dash
+      gameCtx.lineWidth = 2;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, headY + 4);
+      gameCtx.lineTo(centerX + 4, headY + 4);
+      gameCtx.stroke();
+      gameCtx.lineWidth = 3;
+    } else {
+      // Standing: two eyes + smile
+      gameCtx.beginPath();
+      gameCtx.arc(centerX - 3, headY, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      gameCtx.beginPath();
+      gameCtx.arc(centerX + 3, headY, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      // Smile
+      gameCtx.lineWidth = 1.5;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY + 3, 2.5, 0.2 * Math.PI, 0.8 * Math.PI);
+      gameCtx.stroke();
+      gameCtx.lineWidth = 3;
+    }
+
+    // 5. Dress body - solid triangle
+    gameCtx.fillStyle = color;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyStartY);
+    gameCtx.lineTo(centerX - 10, bodyEndY + 2);
+    gameCtx.lineTo(centerX + 10, bodyEndY + 2);
+    gameCtx.closePath();
+    gameCtx.fill();
+
+    // 6. Legs (under dress)
+    gameCtx.strokeStyle = '#fff';
+    gameCtx.lineWidth = 2;
+    const legSwingGirl = isMoving ? Math.sin(animFrame * Math.PI) * 8 : 0;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX - 4, bodyEndY);
+    gameCtx.lineTo(centerX - 6 + legSwingGirl, bodyEndY + limbLength);
+    gameCtx.moveTo(centerX + 4, bodyEndY);
+    gameCtx.lineTo(centerX + 6 - legSwingGirl, bodyEndY + limbLength);
+    gameCtx.stroke();
+    gameCtx.lineWidth = 3;
+    gameCtx.strokeStyle = color;
+
   } else {
-    // Boy character
-    // Head
+    // === BOY CHARACTER - same detailed style as local player ===
+
+    // Head circle (stroked)
     gameCtx.beginPath();
     gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
     gameCtx.stroke();
 
-    // Eyes
+    // Hair - marker tip style
     gameCtx.fillStyle = color;
     gameCtx.beginPath();
-    gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
-    gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
+    gameCtx.moveTo(centerX - 8, headY - headRadius + 1);
+    gameCtx.lineTo(centerX - 4, headY - headRadius - 5);
+    gameCtx.lineTo(centerX + 10, headY - headRadius + 4);
+    gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 8, headY - headRadius + 1);
+    gameCtx.closePath();
     gameCtx.fill();
+    gameCtx.stroke();
+
+    // Face
+    gameCtx.fillStyle = color;
+    if (isMoving) {
+      // Running: single side eye + mouth dash
+      gameCtx.beginPath();
+      gameCtx.arc(centerX + 3, headY - 1, 2, 0, Math.PI * 2);
+      gameCtx.fill();
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX + 1, headY + 4);
+      gameCtx.lineTo(centerX + 5, headY + 4);
+      gameCtx.stroke();
+    } else {
+      // Standing: two eyes + smile
+      gameCtx.beginPath();
+      gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      gameCtx.beginPath();
+      gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
+      gameCtx.fill();
+      // Smile
+      gameCtx.lineWidth = 1.5;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY + 3, 3, 0.2 * Math.PI, 0.8 * Math.PI);
+      gameCtx.stroke();
+      gameCtx.lineWidth = 3;
+    }
 
     // Body
     gameCtx.beginPath();
@@ -1670,26 +2133,27 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.fillText(rp.displayName, centerX, headY - headRadius - 13);
   }
 
-  // Draw "IT" indicator for tag game - check directly against tagGameState
-  const isThisPlayerIt = isTagMode && tagGameState?.itPlayerId === playerId;
+  gameCtx.restore();
+
+  // Draw "IT" indicator for tag game AFTER restore so it's not flipped
+  const isThisPlayerIt = isTagMode && rp.isIt;
   if (isThisPlayerIt) {
+    gameCtx.save();
     gameCtx.shadowColor = '#ff0000';
     gameCtx.shadowBlur = 15;
     gameCtx.fillStyle = '#ff0000';
-    gameCtx.font = 'bold 14px sans-serif';
+    gameCtx.font = 'bold 16px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
-    gameCtx.fillText('IT', centerX, headY - headRadius - 35);
-
-    // Red glow circle around head
-    gameCtx.strokeStyle = '#ff0000';
-    gameCtx.lineWidth = 2;
-    gameCtx.beginPath();
-    gameCtx.arc(centerX, headY, headRadius + 5, 0, Math.PI * 2);
-    gameCtx.stroke();
+    gameCtx.fillText('IT', centerX, headY - headRadius - 25);
+    gameCtx.restore();
   }
 
-  gameCtx.restore();
+  // Draw cooldown shield if player is in cooldown (just got tagged)
+  const now = Date.now();
+  if (isTagMode && rp.tagCooldownUntil && rp.tagCooldownUntil > now) {
+    drawCooldownShield(centerX, y + h / 2, rp.tagCooldownUntil, now);
+  }
 }
 
 // Draw hat for remote players
@@ -2029,24 +2493,71 @@ function drawPlayer(): void {
   // Draw accessories on top
   drawAccessories(centerX, headY, headRadius);
 
-  // Draw "IT" indicator for tag game (local player)
-  const currentUser = getCurrentUser();
-  if (isTagMode && tagGameState?.itPlayerId === currentUser?.uid) {
+  gameCtx.restore();
+
+  // Draw "IT" indicator for tag game AFTER restore so it's not flipped
+  if (isTagMode && isCurrentUserIt()) {
+    gameCtx.save();
     gameCtx.shadowColor = '#ff0000';
     gameCtx.shadowBlur = 15;
     gameCtx.fillStyle = '#ff0000';
-    gameCtx.font = 'bold 14px sans-serif';
+    gameCtx.font = 'bold 16px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
     gameCtx.fillText('IT', centerX, headY - headRadius - 20);
+    gameCtx.restore();
+  }
 
-    // Red glow circle around head
-    gameCtx.strokeStyle = '#ff0000';
+  // Draw cooldown shield if local player is in cooldown
+  const now = Date.now();
+  if (isTagMode && localTagCooldownUntil > now) {
+    drawCooldownShield(centerX, player.y + player.height / 2, localTagCooldownUntil, now);
+  }
+}
+
+/**
+ * Draw a cooldown shield around a player who just got tagged.
+ * Shows pie segments that disappear every 0.5 seconds.
+ */
+function drawCooldownShield(centerX: number, centerY: number, cooldownUntil: number, now: number): void {
+  if (!gameCtx) return;
+
+  const timeRemaining = cooldownUntil - now;
+  if (timeRemaining <= 0) return;
+
+  const totalSegments = 6; // 6 segments for 3 second cooldown (0.5s each)
+  const segmentDuration = TAG_COOLDOWN / totalSegments;
+  const segmentsRemaining = Math.ceil(timeRemaining / segmentDuration);
+
+  const radius = 35; // Shield radius around player
+  const segmentAngle = (Math.PI * 2) / totalSegments;
+
+  gameCtx.save();
+
+  // Draw remaining pie segments
+  for (let i = 0; i < segmentsRemaining; i++) {
+    const startAngle = -Math.PI / 2 + (i * segmentAngle); // Start from top
+    const endAngle = startAngle + segmentAngle - 0.05; // Small gap between segments
+
+    // Semi-transparent cyan/blue shield color
+    gameCtx.fillStyle = 'rgba(0, 200, 255, 0.3)';
+    gameCtx.strokeStyle = 'rgba(0, 200, 255, 0.7)';
     gameCtx.lineWidth = 2;
+
     gameCtx.beginPath();
-    gameCtx.arc(centerX, headY, headRadius + 5, 0, Math.PI * 2);
+    gameCtx.moveTo(centerX, centerY);
+    gameCtx.arc(centerX, centerY, radius, startAngle, endAngle);
+    gameCtx.closePath();
+    gameCtx.fill();
     gameCtx.stroke();
   }
+
+  // Draw outer ring
+  gameCtx.strokeStyle = 'rgba(0, 200, 255, 0.5)';
+  gameCtx.lineWidth = 3;
+  gameCtx.beginPath();
+  gameCtx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+  gameCtx.stroke();
 
   gameCtx.restore();
 }
@@ -2232,9 +2743,18 @@ function drawHUD(): void {
   gameCtx.fillRect(scrollX + 10, scrollY + 10, hudWidth, 70);
 
   // Mode indicator
-  gameCtx.fillStyle = playMode === 'race' ? '#ef4444' : '#22c55e';
+  let modeText = 'EXPLORE MODE';
+  let modeColor = '#22c55e'; // green
+  if (isTagMode) {
+    modeText = 'TAG MODE';
+    modeColor = '#f97316'; // orange
+  } else if (playMode === 'race') {
+    modeText = 'RACE MODE';
+    modeColor = '#ef4444'; // red
+  }
+  gameCtx.fillStyle = modeColor;
   gameCtx.font = 'bold 11px sans-serif';
-  gameCtx.fillText(playMode === 'race' ? 'RACE MODE' : 'EXPLORE MODE', scrollX + 20, scrollY + 25);
+  gameCtx.fillText(modeText, scrollX + 20, scrollY + 25);
 
   if (playMode === 'race') {
     // Timer
@@ -2304,6 +2824,37 @@ function drawHUD(): void {
       gameCtx.font = 'bold 14px sans-serif';
       gameCtx.fillText('GAME OVER - Press Play to retry', scrollX + 20, scrollY + 100);
     }
+  } else if (isTagMode) {
+    // Tag mode - show who's IT (use helper that handles Firebase fallback)
+    const isLocalPlayerIt = isCurrentUserIt();
+
+    if (isLocalPlayerIt) {
+      gameCtx.fillStyle = '#ff4444';
+      gameCtx.font = 'bold 16px sans-serif';
+      gameCtx.fillText("You're IT! Tag someone!", scrollX + 20, scrollY + 48);
+    } else {
+      // Find who is IT from other players
+      let itPlayerName = '';
+      for (const [, rp] of otherPlayers) {
+        if (rp.isIt) {
+          itPlayerName = rp.displayName || 'Another player';
+          break;
+        }
+      }
+      if (itPlayerName) {
+        gameCtx.fillStyle = '#22c55e';
+        gameCtx.font = 'bold 16px sans-serif';
+        gameCtx.fillText('Run! ' + itPlayerName + ' is IT!', scrollX + 20, scrollY + 48);
+      } else {
+        gameCtx.fillStyle = '#fff';
+        gameCtx.font = '16px sans-serif';
+        gameCtx.fillText('Waiting for IT player...', scrollX + 20, scrollY + 48);
+      }
+    }
+
+    gameCtx.fillStyle = '#888';
+    gameCtx.font = '12px sans-serif';
+    gameCtx.fillText('Touch another player to tag them', scrollX + 20, scrollY + 66);
   } else {
     // Explore mode - just show simple message
     gameCtx.fillStyle = '#fff';
@@ -2865,20 +3416,63 @@ export function toggleTagMode(): void {
     isTagMode = true;
     const pageKey = getPageKey();
     console.log('[OpenOverlay] Starting/joining tag game on page:', pageKey);
+
+    // Check if any other player is already "it"
+    let someoneElseIsIt = false;
+    for (const [, rp] of otherPlayers) {
+      if (rp.isIt) {
+        someoneElseIsIt = true;
+        break;
+      }
+    }
+
+    // If no one else is "it", we become "it"
+    localIsIt = !someoneElseIsIt;
+    console.log('[OpenOverlay] localIsIt:', localIsIt, 'someoneElseIsIt:', someoneElseIsIt);
+
+    // Dispatch event with initial local state
+    document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
+      detail: { isTagMode: true, isIt: localIsIt, gameActive: true }
+    }));
+
+    // Force immediate sync so other players see our isIt state
+    syncPlayerToCloud();
+    console.log('[OpenOverlay] Forced sync with isIt:', localIsIt);
+
+    if (localIsIt) {
+      showNotification("You're IT!", 'Tag another player!', 2000);
+    } else {
+      showNotification('Tag Mode!', 'Avoid being tagged!', 2000);
+    }
+
+    // Try Firebase (may fail due to permissions - that's ok, we use local state)
+    // Note: startTagGame returns false both when joining existing game AND when Firebase fails
+    // So we only trust it if it returns true (meaning we definitely became IT via Firebase)
     startTagGame(pageKey).then((isNowIt) => {
       console.log('[OpenOverlay] startTagGame returned:', isNowIt);
-      if (isNowIt) {
-        showNotification("You're IT!", 'Tag another player!', 2000);
-      } else {
-        showNotification('Tag Mode!', 'Avoid being tagged!', 2000);
+      if (isNowIt && !localIsIt) {
+        // Firebase says we're IT but local says no - trust Firebase
+        localIsIt = true;
+        document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
+          detail: { isTagMode: true, isIt: true, gameActive: true }
+        }));
       }
+      // If Firebase returns false, we keep our local state (could be IT or not)
     }).catch((err) => {
-      console.error('[OpenOverlay] startTagGame error:', err);
+      console.log('[OpenOverlay] Firebase unavailable, using local tag state:', localIsIt);
     });
   } else {
     // Leave tag game
     isTagMode = false;
+    localIsIt = false;
+    lastTaggedByPlayerId = null;
+    pendingTaggedPlayerId = null;
+    pendingTaggedAt = 0;
     console.log('[OpenOverlay] Left tag mode');
+    // Dispatch event to update UI
+    document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
+      detail: { isTagMode: false, isIt: false, gameActive: false }
+    }));
     showNotification('Left tag game', '', 1500);
   }
 }
@@ -2888,6 +3482,5 @@ export function isInTagMode(): boolean {
 }
 
 export function isCurrentPlayerIt(): boolean {
-  const currentUser = getCurrentUser();
-  return isTagMode && tagGameState?.itPlayerId === currentUser?.uid;
+  return isTagMode && isCurrentUserIt();
 }

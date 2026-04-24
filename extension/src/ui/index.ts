@@ -152,10 +152,12 @@ const STYLES = `
     border-radius: 10px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
     display: none;
-    gap: 6px;
-    align-items: center;
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
     pointer-events: auto;
     z-index: 2147483647;
+    max-width: 320px;
   }
 
   .toolbar.game-mode {
@@ -169,6 +171,7 @@ const STYLES = `
     color: #666;
     font-size: 12px;
     user-select: none;
+    text-align: center;
   }
 
   .toolbar-drag-handle:hover {
@@ -188,6 +191,13 @@ const STYLES = `
     display: flex;
   }
 
+  .toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
   .toolbar-section {
     display: flex;
     align-items: center;
@@ -195,10 +205,7 @@ const STYLES = `
   }
 
   .toolbar-divider {
-    width: 1px;
-    height: 20px;
-    background: #333;
-    flex-shrink: 0;
+    display: none;
   }
 
   .toolbar label {
@@ -229,7 +236,6 @@ const STYLES = `
   }
 
   .toolbar input[type="range"] {
-    width: 180px;
     height: 6px;
     -webkit-appearance: none;
     background: #333;
@@ -247,10 +253,9 @@ const STYLES = `
   }
 
   .quick-colors {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(4, 14px);
     gap: 2px;
-    max-width: 100px;
   }
 
   .quick-color {
@@ -280,7 +285,7 @@ const STYLES = `
   }
 
   .toolbar.game-mode .quick-colors {
-    max-width: 80px;
+    grid-template-columns: repeat(4, 14px);
   }
 
   .brush-styles {
@@ -439,8 +444,8 @@ const STYLES = `
 
   .draw-controls, .text-controls {
     display: none;
-    align-items: center;
-    gap: 10px;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .draw-controls.active, .text-controls.active {
@@ -452,9 +457,10 @@ const STYLES = `
     border: 1px solid #333;
     border-radius: 6px;
     color: #fff;
-    padding: 8px 12px;
-    font-size: 14px;
-    width: 160px;
+    padding: 6px 10px;
+    font-size: 13px;
+    flex: 1;
+    min-width: 100px;
     font-family: inherit;
   }
 
@@ -531,6 +537,7 @@ const STYLES = `
     display: none !important;
   }
 
+  .toolbar.game-mode > .toolbar-row,
   .toolbar.game-mode > .toolbar-section,
   .toolbar.game-mode > .toolbar-divider {
     display: none !important;
@@ -1194,29 +1201,20 @@ export function initUI(): void {
 
     <!-- DRAW MODE CONTROLS -->
     <div class="draw-controls active" id="draw-controls">
-      <!-- Brush Styles -->
-      <div class="toolbar-section">
+      <!-- Row 1: Brushes + Tools -->
+      <div class="toolbar-row">
         <div class="brush-styles" id="oo-brushes">
           ${BRUSH_STYLES.map(b => `
             <button class="brush-btn ${b.id === 'solid' ? 'active' : ''}"
                     data-brush="${b.id}" title="${b.title}">${b.label}</button>
           `).join('')}
         </div>
-      </div>
-
-      <div class="toolbar-divider"></div>
-
-      <!-- Tools -->
-      <div class="toolbar-section">
         <button class="tool-btn" id="oo-eraser" title="Eraser">🧹</button>
-        <button class="tool-btn" id="oo-layer-bg" title="Background layer (behind character)">⬇️</button>
-        <button class="tool-btn" id="oo-layer-fg" title="Foreground layer (hides character - for secret passages)">⬆️</button>
+        <button class="tool-btn" id="oo-layer-bg" title="Background">⬇️</button>
+        <button class="tool-btn" id="oo-layer-fg" title="Foreground">⬆️</button>
       </div>
-
-      <div class="toolbar-divider"></div>
-
-      <!-- Shape Tools -->
-      <div class="toolbar-section">
+      <!-- Row 2: Shapes -->
+      <div class="toolbar-row">
         <div class="shape-tools" id="oo-shapes">
           ${SHAPE_TOOLS.map(s => `
             <button class="shape-btn ${s.id === 'none' ? 'active' : ''}"
@@ -1225,21 +1223,12 @@ export function initUI(): void {
         </div>
         <button class="fill-btn" id="oo-fill-toggle" title="Toggle fill">◧</button>
       </div>
-
-      <div class="toolbar-divider"></div>
     </div>
 
     <!-- TEXT MODE CONTROLS -->
     <div class="text-controls" id="text-controls">
-      <!-- Text Input -->
-      <div class="toolbar-section">
-        <input type="text" class="text-input" id="oo-text-input" placeholder="Type text here...">
-      </div>
-
-      <div class="toolbar-divider"></div>
-
-      <!-- Text Styles -->
-      <div class="toolbar-section">
+      <div class="toolbar-row">
+        <input type="text" class="text-input" id="oo-text-input" placeholder="Type text...">
         <div class="text-styles" id="oo-text-styles">
           ${TEXT_STYLES.map(s => `
             <button class="text-style-btn ${s.id === 'normal' ? 'active' : ''}"
@@ -1247,12 +1236,7 @@ export function initUI(): void {
           `).join('')}
         </div>
       </div>
-
-      <div class="toolbar-divider"></div>
-
       <span class="place-hint">Click page to place</span>
-
-      <div class="toolbar-divider"></div>
     </div>
 
     <!-- GAME MODE CONTROLS -->
@@ -1317,8 +1301,8 @@ export function initUI(): void {
     </div>
 
     <!-- SHARED CONTROLS -->
-    <!-- Color -->
-    <div class="toolbar-section">
+    <!-- Color Row -->
+    <div class="toolbar-row">
       <input type="color" id="oo-color" value="#ff3366" title="Color">
       <div class="quick-colors" id="oo-quick-colors">
         ${QUICK_COLORS.map((c, i) => `
@@ -1330,36 +1314,21 @@ export function initUI(): void {
       </div>
     </div>
 
-    <div class="toolbar-divider"></div>
-
-    <!-- Size (hidden in game mode) -->
-    <div class="toolbar-section drawing-only" id="oo-size-section">
+    <!-- Size/Opacity Row (hidden in game mode) -->
+    <div class="toolbar-row drawing-only">
       <label>Size</label>
-      <input type="range" id="oo-size" min="1" max="150" value="24">
+      <input type="range" id="oo-size" min="1" max="150" value="24" style="width: 80px;">
       <span class="size-display" id="oo-size-display">24</span>
-    </div>
-
-    <div class="toolbar-divider drawing-only"></div>
-
-    <!-- Opacity (hidden in game mode) -->
-    <div class="toolbar-section drawing-only" id="oo-opacity-section">
-      <label>Opacity</label>
-      <input type="range" id="oo-opacity" min="10" max="100" value="100">
+      <label style="margin-left: 8px;">Op</label>
+      <input type="range" id="oo-opacity" min="10" max="100" value="100" style="width: 60px;">
       <span class="opacity-display" id="oo-opacity-display">100%</span>
     </div>
 
-    <div class="toolbar-divider drawing-only"></div>
-
-    <!-- Actions -->
-    <div class="toolbar-section">
+    <!-- Actions Row -->
+    <div class="toolbar-row">
       <button class="action-btn btn-undo" id="oo-undo" title="Undo">↩</button>
       <button class="action-btn btn-clear" id="oo-clear" title="Clear All">🗑</button>
-    </div>
-
-    <div class="toolbar-divider"></div>
-
-    <!-- Save/Cancel -->
-    <div class="toolbar-section">
+      <div style="flex: 1;"></div>
       <button class="action-btn btn-cancel" id="oo-cancel">Cancel</button>
       <button class="action-btn btn-save" id="oo-save">Save</button>
     </div>
@@ -1664,8 +1633,17 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   });
 
   toolbar.querySelector('#oo-game-save')?.addEventListener('click', () => {
-    setMode('none');
+    // Just save without hiding - keep game mode active
     document.dispatchEvent(new CustomEvent('oo:save'));
+    // Show confirmation
+    const btn = toolbar.querySelector('#oo-game-save') as HTMLButtonElement;
+    const originalText = btn.textContent;
+    btn.textContent = '✓';
+    btn.style.background = '#22c55e';
+    setTimeout(() => {
+      btn.textContent = originalText;
+      btn.style.background = '';
+    }, 1000);
   });
 
   // Multiplayer setup button - resize window for consistent coordinates
@@ -1699,18 +1677,63 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     }
   });
 
-  // Tag game button
-  const tagButton = toolbar.querySelector('#oo-tag-game');
-  tagButton?.addEventListener('click', () => {
-    document.dispatchEvent(new CustomEvent('oo:toggletag'));
-    tagButton.classList.toggle('active');
-    const btn = tagButton as HTMLButtonElement;
-    if (tagButton.classList.contains('active')) {
-      btn.textContent = '🏷️ IT!';
-    } else {
-      btn.textContent = '🏷️ Tag';
+  // Tag game button - starts multiplayer setup first, then tag game
+  const tagButton = toolbar.querySelector('#oo-tag-game') as HTMLButtonElement;
+  let tagModeActive = false;
+
+  tagButton?.addEventListener('click', async () => {
+    if (tagModeActive) {
+      // Leave tag game
+      document.dispatchEvent(new CustomEvent('oo:toggletag'));
+      return;
+    }
+
+    // Starting tag game - first setup multiplayer window
+    tagButton.textContent = '⏳';
+    tagButton.disabled = true;
+
+    try {
+      // Resize window for consistent coordinates
+      const response = await chrome.runtime.sendMessage({ type: 'SETUP_MULTIPLAYER' });
+      if (response?.success) {
+        console.log('[OpenOverlay UI] Multiplayer setup complete, starting tag game');
+        // Now start the tag game
+        document.dispatchEvent(new CustomEvent('oo:toggletag'));
+      } else {
+        console.error('[OpenOverlay UI] Multiplayer setup failed:', response?.error);
+        tagButton.textContent = '❌';
+        setTimeout(() => {
+          tagButton.textContent = '🏷️ Tag';
+          tagButton.disabled = false;
+        }, 1500);
+      }
+    } catch (err) {
+      console.error('[OpenOverlay UI] Error setting up multiplayer:', err);
+      tagButton.textContent = '❌';
+      setTimeout(() => {
+        tagButton.textContent = '🏷️ Tag';
+        tagButton.disabled = false;
+      }, 1500);
     }
   });
+
+  // Listen for tag state changes from game
+  document.addEventListener('oo:tagstatechange', ((e: CustomEvent) => {
+    const { isTagMode, isIt } = e.detail;
+    tagModeActive = isTagMode;
+    tagButton.disabled = false;
+
+    if (!isTagMode) {
+      tagButton.textContent = '🏷️ Tag';
+      tagButton.classList.remove('active');
+    } else if (isIt) {
+      tagButton.textContent = '🏷️ IT!';
+      tagButton.classList.add('active');
+    } else {
+      tagButton.textContent = '🏷️ Run!';
+      tagButton.classList.add('active');
+    }
+  }) as EventListener);
 
   // Drag functionality
   const dragHandle = toolbar.querySelector('#oo-drag-handle');
