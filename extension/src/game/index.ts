@@ -22,6 +22,8 @@ import { getCurrentUser } from '@/auth';
 // Game state
 let gameCanvas: HTMLCanvasElement | null = null;
 let gameCtx: CanvasRenderingContext2D | null = null;
+let overlayCanvas: HTMLCanvasElement | null = null;
+let overlayCtx: CanvasRenderingContext2D | null = null;
 let gameMode: 'none' | 'play' | 'build' = 'none';
 let buildTool: 'select' | 'start' | 'finish' | 'checkpoint' | 'spawn' | 'trampoline' | 'speedBoost' | 'highJump' | 'spike' = 'spawn';
 
@@ -240,12 +242,25 @@ export function initGame(): void {
     position: absolute;
     top: 0;
     left: 0;
-    z-index: 2147483645;
+    z-index: 2147483638;
     pointer-events: none;
   `;
 
   document.body.appendChild(gameCanvas);
   gameCtx = gameCanvas.getContext('2d');
+
+  // Create overlay canvas for notifications (above foreground drawings)
+  overlayCanvas = document.createElement('canvas');
+  overlayCanvas.id = 'oo-overlay-canvas';
+  overlayCanvas.style.cssText = `
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2147483646;
+    pointer-events: none;
+  `;
+  document.body.appendChild(overlayCanvas);
+  overlayCtx = overlayCanvas.getContext('2d');
 
   resizeGameCanvas();
   window.addEventListener('resize', resizeGameCanvas);
@@ -375,6 +390,15 @@ function resizeGameCanvas(): void {
   gameCanvas.width = docWidth * dpr;
   gameCanvas.height = docHeight * dpr;
   gameCtx.scale(dpr, dpr);
+
+  // Also resize overlay canvas
+  if (overlayCanvas && overlayCtx) {
+    overlayCanvas.style.width = `${docWidth}px`;
+    overlayCanvas.style.height = `${docHeight}px`;
+    overlayCanvas.width = docWidth * dpr;
+    overlayCanvas.height = docHeight * dpr;
+    overlayCtx.scale(dpr, dpr);
+  }
 
   render();
 }
@@ -1553,6 +1577,11 @@ function render(): void {
   if (!gameCtx || !gameCanvas) return;
 
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
+
+  // Clear overlay canvas
+  if (overlayCtx && overlayCanvas) {
+    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  }
 
   // Draw blood splats (behind everything)
   drawBloodSplats();
@@ -2909,29 +2938,29 @@ function drawHUD(): void {
   drawNotification();
   drawNTBFlash();
 
-  // Countdown overlay
-  if (isCountingDown) {
+  // Countdown overlay (on overlay canvas so it's above foreground)
+  if (isCountingDown && overlayCtx) {
     const elapsed = performance.now() - countdownStartTime;
     const remaining = COUNTDOWN_DURATION - elapsed;
     const countNum = remaining > 1000 ? '2' : '1';
 
-    gameCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    gameCtx.fillRect(scrollX, scrollY, window.innerWidth, window.innerHeight);
+    overlayCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    overlayCtx.fillRect(scrollX, scrollY, window.innerWidth, window.innerHeight);
 
-    gameCtx.fillStyle = '#fff';
-    gameCtx.font = 'bold 120px sans-serif';
-    gameCtx.textAlign = 'center';
-    gameCtx.textBaseline = 'middle';
-    gameCtx.fillText(countNum, scrollX + window.innerWidth / 2, scrollY + window.innerHeight / 2);
-    gameCtx.textBaseline = 'alphabetic';
-    gameCtx.textAlign = 'left';
+    overlayCtx.fillStyle = '#fff';
+    overlayCtx.font = 'bold 120px sans-serif';
+    overlayCtx.textAlign = 'center';
+    overlayCtx.textBaseline = 'middle';
+    overlayCtx.fillText(countNum, scrollX + window.innerWidth / 2, scrollY + window.innerHeight / 2);
+    overlayCtx.textBaseline = 'alphabetic';
+    overlayCtx.textAlign = 'left';
   }
 
   gameCtx.restore();
 }
 
 function drawNotification(): void {
-  if (!gameCtx || !notification) return;
+  if (!overlayCtx || !notification) return;
 
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
@@ -2943,38 +2972,38 @@ function drawNotification(): void {
   const popupY = scrollY + window.innerHeight - popupHeight - 20;
 
   // Background
-  gameCtx.fillStyle = 'rgba(0, 0, 0, 0.9)';
-  gameCtx.fillRect(popupX, popupY, popupWidth, popupHeight);
+  overlayCtx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+  overlayCtx.fillRect(popupX, popupY, popupWidth, popupHeight);
 
   // Border
-  gameCtx.strokeStyle = notification.text === 'GO!' ? '#22c55e' :
+  overlayCtx.strokeStyle = notification.text === 'GO!' ? '#22c55e' :
                         notification.text === 'GAME OVER' ? '#ef4444' :
                         notification.text === 'You fell!' ? '#f59e0b' : '#3b82f6';
-  gameCtx.lineWidth = 2;
-  gameCtx.strokeRect(popupX, popupY, popupWidth, popupHeight);
+  overlayCtx.lineWidth = 2;
+  overlayCtx.strokeRect(popupX, popupY, popupWidth, popupHeight);
 
   // Main text
-  gameCtx.fillStyle = '#fff';
-  gameCtx.font = 'bold 16px sans-serif';
-  gameCtx.textAlign = 'center';
+  overlayCtx.fillStyle = '#fff';
+  overlayCtx.font = 'bold 16px sans-serif';
+  overlayCtx.textAlign = 'center';
   const textY = notification.subtext ? popupY + 22 : popupY + 26;
-  gameCtx.fillText(notification.text, popupX + popupWidth / 2, textY);
+  overlayCtx.fillText(notification.text, popupX + popupWidth / 2, textY);
 
   // Subtext
   if (notification.subtext) {
-    gameCtx.fillStyle = '#888';
-    gameCtx.font = '13px sans-serif';
-    gameCtx.fillText(notification.subtext, popupX + popupWidth / 2, popupY + 44);
+    overlayCtx.fillStyle = '#888';
+    overlayCtx.font = '13px sans-serif';
+    overlayCtx.fillText(notification.subtext, popupX + popupWidth / 2, popupY + 44);
   }
 
-  gameCtx.textAlign = 'left';
+  overlayCtx.textAlign = 'left';
 }
 
 /**
  * Draw the "No Tag Backs" fullscreen flash overlay.
  */
 function drawNTBFlash(): void {
-  if (!gameCtx || performance.now() > ntbFlashEndTime) return;
+  if (!overlayCtx || performance.now() > ntbFlashEndTime) return;
 
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
@@ -2989,27 +3018,27 @@ function drawNTBFlash(): void {
   const alpha = Math.min(0.7, progress * 0.9);
 
   // Red flash background
-  gameCtx.save();
-  gameCtx.fillStyle = `rgba(220, 38, 38, ${alpha * 0.3})`;
-  gameCtx.fillRect(scrollX, scrollY, w, h);
+  overlayCtx.save();
+  overlayCtx.fillStyle = `rgba(220, 38, 38, ${alpha * 0.3})`;
+  overlayCtx.fillRect(scrollX, scrollY, w, h);
 
   // "NO TAG BACKS" text with glow
   const textAlpha = Math.min(1, progress * 1.5);
-  gameCtx.font = 'bold 72px sans-serif';
-  gameCtx.textAlign = 'center';
-  gameCtx.textBaseline = 'middle';
+  overlayCtx.font = 'bold 72px sans-serif';
+  overlayCtx.textAlign = 'center';
+  overlayCtx.textBaseline = 'middle';
 
   // Glow effect
-  gameCtx.shadowColor = '#ff0000';
-  gameCtx.shadowBlur = 30;
-  gameCtx.fillStyle = `rgba(255, 255, 255, ${textAlpha})`;
-  gameCtx.fillText('NO TAG BACKS', scrollX + w / 2, scrollY + h / 2);
+  overlayCtx.shadowColor = '#ff0000';
+  overlayCtx.shadowBlur = 30;
+  overlayCtx.fillStyle = `rgba(255, 255, 255, ${textAlpha})`;
+  overlayCtx.fillText('NO TAG BACKS', scrollX + w / 2, scrollY + h / 2);
 
   // Second pass for stronger glow
-  gameCtx.shadowBlur = 15;
-  gameCtx.fillText('NO TAG BACKS', scrollX + w / 2, scrollY + h / 2);
+  overlayCtx.shadowBlur = 15;
+  overlayCtx.fillText('NO TAG BACKS', scrollX + w / 2, scrollY + h / 2);
 
-  gameCtx.restore();
+  overlayCtx.restore();
 }
 
 function drawBuildModeUI(): void {

@@ -210,7 +210,7 @@ export function initCanvas(): void {
   collisionCtx = collisionCanvas.getContext('2d');
 
   // Create visible background canvas (BEHIND game character)
-  // Game canvas is at z-index 2147483645, so we use 2147483635
+  // Game canvas is at z-index 2147483638, so we use 2147483635
   backgroundCanvas = document.createElement('canvas');
   backgroundCanvas.id = 'oo-background-canvas';
   backgroundCanvas.style.cssText = `
