@@ -1004,6 +1004,42 @@ const STYLES = `
     flex-shrink: 0;
   }
 
+  .contributor-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .follow-btn {
+    padding: 4px 10px;
+    border-radius: 12px;
+    border: none;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .follow-btn.follow {
+    background: #3b82f6;
+    color: white;
+  }
+
+  .follow-btn.follow:hover {
+    background: #2563eb;
+  }
+
+  .follow-btn.following {
+    background: #333;
+    color: #aaa;
+  }
+
+  .follow-btn.following:hover {
+    background: #ef4444;
+    color: white;
+  }
+
   .toggle-switch {
     position: relative;
     width: 44px;
@@ -2160,12 +2196,12 @@ function loadVisibilityState(): void {
 }
 
 /**
- * Render the contributors list with per-user toggles
+ * Render the contributors list with per-user toggles and follow buttons
  */
-function renderContributorsList(
+async function renderContributorsList(
   root: ShadowRoot,
   contributors: { userId: string; displayName: string; photoURL: string }[]
-): void {
+): Promise<void> {
   const container = root.querySelector('#contributors-list');
   if (!container) return;
 
@@ -2178,10 +2214,20 @@ function renderContributorsList(
     return;
   }
 
+  // Check following status for each contributor
+  const followingStatus = new Map<string, boolean>();
+  if (currentUser) {
+    await Promise.all(otherContributors.map(async (c) => {
+      const following = await isFollowing(currentUser.uid, c.userId);
+      followingStatus.set(c.userId, following);
+    }));
+  }
+
   container.innerHTML = otherContributors.map(c => {
     const isVisible = !visibilityState.hiddenUsers.has(c.userId);
     const avatarSrc = c.photoURL || '';
     const avatarFallback = c.displayName?.charAt(0).toUpperCase() || '?';
+    const isFollowingUser = followingStatus.get(c.userId) || false;
 
     return `
       <div class="contributor-row" data-user-id="${c.userId}">
@@ -2192,14 +2238,22 @@ function renderContributorsList(
           }
           <span class="contributor-name">${escapeHtml(c.displayName)}</span>
         </div>
-        <div class="contributor-toggle">
+        <div class="contributor-actions">
+          ${currentUser ? `
+            <button class="follow-btn ${isFollowingUser ? 'following' : 'follow'}"
+                    data-follow-user="${c.userId}"
+                    data-user-name="${escapeHtml(c.displayName)}"
+                    data-user-photo="${avatarSrc}">
+              ${isFollowingUser ? 'Following' : 'Follow'}
+            </button>
+          ` : ''}
           <div class="toggle-switch small ${isVisible ? 'active' : ''}" data-toggle-user="${c.userId}" title="Show/hide this user's drawings"></div>
         </div>
       </div>
     `;
   }).join('');
 
-  // Add click handlers for per-user toggles
+  // Add click handlers for per-user visibility toggles
   container.querySelectorAll('[data-toggle-user]').forEach(toggle => {
     toggle.addEventListener('click', () => {
       const userId = toggle.getAttribute('data-toggle-user');
@@ -2215,6 +2269,50 @@ function renderContributorsList(
       document.dispatchEvent(new CustomEvent('oo:visibility:user', {
         detail: { userId, show: isActive }
       }));
+    });
+  });
+
+  // Add click handlers for follow buttons
+  container.querySelectorAll('[data-follow-user]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const userId = btn.getAttribute('data-follow-user');
+      const userName = btn.getAttribute('data-user-name') || '';
+      const userPhoto = btn.getAttribute('data-user-photo') || '';
+      if (!userId || !currentUser) return;
+
+      const button = btn as HTMLButtonElement;
+      const wasFollowing = button.classList.contains('following');
+
+      // Optimistic UI update
+      button.disabled = true;
+
+      try {
+        if (wasFollowing) {
+          await unfollowUser(currentUser.uid, userId);
+          button.classList.remove('following');
+          button.classList.add('follow');
+          button.textContent = 'Follow';
+        } else {
+          await followUser(currentUser.uid, userId, userName, userPhoto);
+          button.classList.remove('follow');
+          button.classList.add('following');
+          button.textContent = 'Following';
+        }
+      } catch (error) {
+        console.error('[OpenOverlay] Follow action failed:', error);
+        // Revert on error
+        if (wasFollowing) {
+          button.classList.add('following');
+          button.classList.remove('follow');
+          button.textContent = 'Following';
+        } else {
+          button.classList.add('follow');
+          button.classList.remove('following');
+          button.textContent = 'Follow';
+        }
+      } finally {
+        button.disabled = false;
+      }
     });
   });
 }
