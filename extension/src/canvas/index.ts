@@ -4,8 +4,8 @@
  */
 
 import { getColor, getSize, getOpacity, getBrush, getEraser, getLayer, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
-import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, subscribeToDrawings, unsubscribeFromDrawings, isFirestoreAvailable, isLoggedIn } from '@/db';
-import { onAuthStateChanged } from '@/auth';
+import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, subscribeToDrawings, unsubscribeFromDrawings, isFirestoreAvailable, isLoggedIn, getFollowing } from '@/db';
+import { onAuthStateChanged, getCurrentUser } from '@/auth';
 
 let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -75,8 +75,27 @@ type DrawItem = Stroke | TextItem | ShapeItem;
 let items: DrawItem[] = [];
 // Other users' items (read-only, rendered in background)
 let otherUsersItems: DrawItem[] = [];
-// Toggle to show/hide other users' drawings
-let showOthersDrawings = true;
+
+// Drawing visibility controls
+interface DrawingVisibility {
+  showAll: boolean;           // Master toggle (hides everything if false)
+  showMine: boolean;          // Show my own drawings
+  showFollowing: boolean;     // Show drawings from users I follow (when true, only followed users shown)
+  hiddenUsers: Set<string>;   // Individual user IDs to hide
+}
+
+let drawingVisibility: DrawingVisibility = {
+  showAll: true,
+  showMine: true,
+  showFollowing: false,  // Default: show everyone, not just following
+  hiddenUsers: new Set(),
+};
+
+// Cache of followed user IDs (fetched once per page load)
+let followingCache: Set<string> | null = null;
+
+// Contributors on this page (for UI display)
+let pageContributors: { userId: string; displayName: string; photoURL: string }[] = [];
 
 let currentStroke: { x: number; y: number }[] = [];
 let currentAnchor: { element: Element; selector: string; bounds: DOMRect } | null = null;
@@ -247,18 +266,49 @@ export function initCanvas(): void {
   document.addEventListener('oo:undo', undoStroke);
   document.addEventListener('oo:clear', clearStrokes);
 
-  // Toggle for showing/hiding other users' drawings
-  document.addEventListener('oo:toggleothers', ((e: CustomEvent) => {
-    showOthersDrawings = e.detail.show;
+  // Visibility toggles
+  document.addEventListener('oo:visibility:all', ((e: CustomEvent) => {
+    drawingVisibility.showAll = e.detail.show;
+    saveVisibilityPrefs();
     redraw();
-    console.log('[OpenOverlay] Show others\' drawings:', showOthersDrawings);
+    console.log('[OpenOverlay] Visibility - show all:', e.detail.show);
   }) as EventListener);
 
-  // Restore saved preference
-  const savedShowOthers = localStorage.getItem('oo_show_others');
-  if (savedShowOthers === 'false') {
-    showOthersDrawings = false;
-  }
+  document.addEventListener('oo:visibility:mine', ((e: CustomEvent) => {
+    drawingVisibility.showMine = e.detail.show;
+    saveVisibilityPrefs();
+    redraw();
+    console.log('[OpenOverlay] Visibility - show mine:', e.detail.show);
+  }) as EventListener);
+
+  document.addEventListener('oo:visibility:following', ((e: CustomEvent) => {
+    drawingVisibility.showFollowing = e.detail.show;
+    saveVisibilityPrefs();
+    redraw();
+    console.log('[OpenOverlay] Visibility - following only:', e.detail.show);
+  }) as EventListener);
+
+  document.addEventListener('oo:visibility:user', ((e: CustomEvent) => {
+    const { userId, show } = e.detail;
+    if (show) {
+      drawingVisibility.hiddenUsers.delete(userId);
+    } else {
+      drawingVisibility.hiddenUsers.add(userId);
+    }
+    saveVisibilityPrefs();
+    redraw();
+    console.log('[OpenOverlay] Visibility - user', userId, ':', show ? 'shown' : 'hidden');
+  }) as EventListener);
+
+  // Legacy toggle support (for backward compatibility)
+  document.addEventListener('oo:toggleothers', ((e: CustomEvent) => {
+    drawingVisibility.showAll = e.detail.show;
+    saveVisibilityPrefs();
+    redraw();
+  }) as EventListener);
+
+  // Load saved visibility preferences
+  loadVisibilityPrefs();
 
   // Track game mode to avoid canvas undo/clear when in game
   document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
@@ -1168,6 +1218,122 @@ function drawGlow(ctx: CanvasRenderingContext2D, points: { x: number; y: number 
   ctx.drawImage(offCanvas, offsetX, offsetY);
 }
 
+/**
+ * Filter drawings based on visibility settings
+ */
+function filterDrawingsByVisibility(): { item: DrawItem; isOtherUser: boolean }[] {
+  const { showAll, showMine, showFollowing, hiddenUsers } = drawingVisibility;
+
+  // Master toggle - hide everything
+  if (!showAll) return [];
+
+  const result: { item: DrawItem; isOtherUser: boolean }[] = [];
+
+  // My drawings
+  if (showMine) {
+    result.push(...items.map(item => ({ item, isOtherUser: false })));
+  }
+
+  // Other users' drawings
+  for (const item of otherUsersItems) {
+    const ownerId = (item as any)._ownerId as string | undefined;
+
+    // Skip if no owner ID (shouldn't happen but be safe)
+    if (!ownerId) continue;
+
+    // Skip if user is individually hidden
+    if (hiddenUsers.has(ownerId)) continue;
+
+    // If "following only" is enabled, check if user is followed
+    if (showFollowing) {
+      const isFollowed = followingCache?.has(ownerId) ?? false;
+      if (!isFollowed) continue;
+    }
+
+    result.push({ item, isOtherUser: true });
+  }
+
+  return result;
+}
+
+/**
+ * Save visibility preferences to localStorage
+ */
+function saveVisibilityPrefs(): void {
+  const prefs = {
+    showAll: drawingVisibility.showAll,
+    showMine: drawingVisibility.showMine,
+    showFollowing: drawingVisibility.showFollowing,
+    hiddenUsers: Array.from(drawingVisibility.hiddenUsers),
+  };
+  localStorage.setItem('oo_visibility_prefs', JSON.stringify(prefs));
+}
+
+/**
+ * Load visibility preferences from localStorage
+ */
+function loadVisibilityPrefs(): void {
+  try {
+    const saved = localStorage.getItem('oo_visibility_prefs');
+    if (saved) {
+      const prefs = JSON.parse(saved);
+      drawingVisibility = {
+        showAll: prefs.showAll ?? true,
+        showMine: prefs.showMine ?? true,
+        showFollowing: prefs.showFollowing ?? false,
+        hiddenUsers: new Set(prefs.hiddenUsers ?? []),
+      };
+      console.log('[OpenOverlay] Loaded visibility prefs:', drawingVisibility);
+    }
+  } catch {
+    // Use defaults
+  }
+}
+
+/**
+ * Load following list cache
+ */
+async function loadFollowingCache(): Promise<void> {
+  const user = getCurrentUser();
+  if (!user) {
+    followingCache = new Set();
+    return;
+  }
+
+  try {
+    const following = await getFollowing(user.uid);
+    followingCache = new Set(following.map(u => u.uid));
+    console.log('[OpenOverlay] Loaded following cache:', followingCache.size, 'users');
+  } catch (err) {
+    console.warn('[OpenOverlay] Failed to load following cache:', err);
+    followingCache = new Set();
+  }
+}
+
+/**
+ * Get current visibility state (for UI)
+ */
+export function getVisibilityState(): {
+  showAll: boolean;
+  showMine: boolean;
+  showFollowing: boolean;
+  hiddenUsers: string[];
+} {
+  return {
+    showAll: drawingVisibility.showAll,
+    showMine: drawingVisibility.showMine,
+    showFollowing: drawingVisibility.showFollowing,
+    hiddenUsers: Array.from(drawingVisibility.hiddenUsers),
+  };
+}
+
+/**
+ * Get contributors on current page (for UI)
+ */
+export function getPageContributors(): { userId: string; displayName: string; photoURL: string }[] {
+  return pageContributors;
+}
+
 function redraw(): void {
   if (!ctx || !canvas) return;
 
@@ -1263,12 +1429,8 @@ function redraw(): void {
     ctx = saveCtx;
   };
 
-  // Combine all items for layer sorting
-  // Include other users' items only if toggle is on
-  const allItems: { item: DrawItem; isOtherUser: boolean }[] = [
-    ...(showOthersDrawings ? otherUsersItems.map(item => ({ item, isOtherUser: true })) : []),
-    ...items.map(item => ({ item, isOtherUser: false })),
-  ];
+  // Combine all items for layer sorting with visibility filtering
+  const allItems = filterDrawingsByVisibility();
 
   // Separate items by layer
   const backgroundItems = allItems.filter(({ item }) => (item as any).layer === 'background');
@@ -1286,7 +1448,7 @@ function redraw(): void {
   }
 
   // Draw normal layer items to main canvas (character collides with these)
-  console.log('[OpenOverlay] Rendering', normalItems.length, 'normal items to collision canvas (showOthers:', showOthersDrawings, ')');
+  console.log('[OpenOverlay] Rendering', normalItems.length, 'normal items to collision canvas');
   for (const { item, isOtherUser } of normalItems) {
     renderItemTo(ctx!, item, isOtherUser);
     renderItemCollision(item);
@@ -1573,6 +1735,8 @@ async function loadDrawings(): Promise<void> {
       items = cloudData.myItems;
       // Others' items are read-only (rendered in background)
       otherUsersItems = cloudData.otherItems;
+      // Store contributors for visibility UI
+      pageContributors = cloudData.contributors;
 
       // Update localStorage with my items
       localStorage.setItem(`oo_drawing_${pageKey}`, JSON.stringify(items));
@@ -1581,6 +1745,12 @@ async function loadDrawings(): Promise<void> {
       if (cloudData.contributors.length > 0) {
         console.log('[OpenOverlay] Contributors:', cloudData.contributors.map(c => c.displayName).join(', '));
       }
+
+      // Notify UI of contributors update
+      document.dispatchEvent(new CustomEvent('oo:contributors', {
+        detail: { contributors: pageContributors }
+      }));
+
       redraw(); // This also updates collision canvas
     });
 
@@ -1595,8 +1765,15 @@ async function loadDrawings(): Promise<void> {
     if (cloudData !== null) {
       items = cloudData.myItems;
       otherUsersItems = cloudData.otherItems;
+      pageContributors = cloudData.contributors;
       localStorage.setItem(`oo_drawing_${pageKey}`, JSON.stringify(items));
       console.log('[OpenOverlay] Loaded from cloud:', items.length, 'mine,', otherUsersItems.length, 'from others');
+
+      // Notify UI of contributors
+      document.dispatchEvent(new CustomEvent('oo:contributors', {
+        detail: { contributors: pageContributors }
+      }));
+
       redraw();
       return;
     }
@@ -1629,8 +1806,11 @@ function setupAuthListener(): void {
   onAuthStateChanged((user) => {
     if (user) {
       console.log('[OpenOverlay] User logged in, reloading drawings from cloud');
+      // Load following cache for visibility filtering
+      loadFollowingCache();
     } else {
       console.log('[OpenOverlay] User logged out, reloading public drawings');
+      followingCache = null;
     }
     // Always reload to get current state (public drawings visible even when logged out)
     loadDrawings();

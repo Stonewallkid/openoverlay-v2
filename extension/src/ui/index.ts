@@ -25,7 +25,7 @@ let gameBuildTool: string = 'spawn';
 // Auth state
 let currentAuthUser: User | null = null;
 let isProfileModalOpen = false;
-let showOthersDrawings = true; // Toggle to show/hide other users' drawings
+// Visibility state is now managed by visibilityState object below
 
 // Quick color presets - expanded palette
 const QUICK_COLORS = [
@@ -704,12 +704,13 @@ const STYLES = `
     bottom: 80px;
     right: 20px;
     width: 320px;
+    max-height: calc(100vh - 100px);
     background: #111;
     border-radius: 16px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
     display: none;
     flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto;
     z-index: 2147483647;
     pointer-events: auto;
   }
@@ -824,6 +825,14 @@ const STYLES = `
     border-bottom: 1px solid #333;
   }
 
+  .profile-settings-header {
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+
   .profile-setting-row {
     display: flex;
     justify-content: space-between;
@@ -834,6 +843,69 @@ const STYLES = `
   .profile-setting-label {
     color: #ccc;
     font-size: 14px;
+  }
+
+  .profile-contributors {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #333;
+  }
+
+  .profile-contributors-header {
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+
+  .contributors-list {
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  .no-contributors {
+    color: #666;
+    font-size: 13px;
+    font-style: italic;
+    padding: 8px 0;
+  }
+
+  .contributor-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    gap: 10px;
+  }
+
+  .contributor-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .contributor-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #333;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .contributor-name {
+    color: #ddd;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .contributor-toggle {
+    flex-shrink: 0;
   }
 
   .toggle-switch {
@@ -864,6 +936,21 @@ const STYLES = `
 
   .toggle-switch.active::after {
     transform: translateX(20px);
+  }
+
+  .toggle-switch.small {
+    width: 32px;
+    height: 18px;
+    border-radius: 9px;
+  }
+
+  .toggle-switch.small::after {
+    width: 14px;
+    height: 14px;
+  }
+
+  .toggle-switch.small.active::after {
+    transform: translateX(14px);
   }
 
   .profile-bookmarks {
@@ -1171,9 +1258,24 @@ export function initUI(): void {
         <span class="profile-bio-empty">No bio yet</span>
       </div>
       <div class="profile-settings">
+        <div class="profile-settings-header">Drawing Visibility</div>
         <div class="profile-setting-row">
-          <span class="profile-setting-label">Show others' drawings</span>
-          <div class="toggle-switch active" id="toggle-others-drawings" title="Show or hide drawings from other users"></div>
+          <span class="profile-setting-label">Show all drawings</span>
+          <div class="toggle-switch active" id="toggle-all-drawings" title="Master toggle - hide all drawings"></div>
+        </div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">My drawings</span>
+          <div class="toggle-switch active" id="toggle-my-drawings" title="Show or hide your own drawings"></div>
+        </div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Only people I follow</span>
+          <div class="toggle-switch" id="toggle-following-only" title="Show only drawings from users you follow"></div>
+        </div>
+        <div class="profile-contributors" id="contributors-section">
+          <div class="profile-contributors-header">Contributors on this page</div>
+          <div id="contributors-list" class="contributors-list">
+            <div class="no-contributors">No other contributors yet</div>
+          </div>
         </div>
       </div>
       <div class="profile-bookmarks" id="profile-bookmarks">
@@ -1812,33 +1914,150 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     }
   });
 
-  // Toggle for showing/hiding other users' drawings
-  const othersDrawingsToggle = shadowRoot.querySelector('#toggle-others-drawings');
-  othersDrawingsToggle?.addEventListener('click', () => {
-    showOthersDrawings = !showOthersDrawings;
-    othersDrawingsToggle.classList.toggle('active', showOthersDrawings);
-    // Dispatch event to canvas
-    document.dispatchEvent(new CustomEvent('oo:toggleothers', {
-      detail: { show: showOthersDrawings }
-    }));
-    // Save preference
-    localStorage.setItem('oo_show_others', showOthersDrawings ? 'true' : 'false');
-  });
+  // Visibility toggles
+  setupVisibilityToggles(shadowRoot);
 
-  // Restore saved preference
-  const savedShowOthers = localStorage.getItem('oo_show_others');
-  if (savedShowOthers === 'false') {
-    showOthersDrawings = false;
-    othersDrawingsToggle?.classList.remove('active');
-    document.dispatchEvent(new CustomEvent('oo:toggleothers', {
-      detail: { show: false }
-    }));
-  }
+  // Listen for contributors updates from canvas
+  document.addEventListener('oo:contributors', ((e: CustomEvent) => {
+    renderContributorsList(shadowRoot, e.detail.contributors);
+  }) as EventListener);
 
   // Listen for auth state changes
   onAuthStateChanged((user) => {
     currentAuthUser = user;
     updateProfileUI(user);
+  });
+}
+
+// Visibility state (synced with canvas)
+let visibilityState = {
+  showAll: true,
+  showMine: true,
+  showFollowing: false,
+  hiddenUsers: new Set<string>(),
+};
+
+/**
+ * Setup visibility toggle event handlers
+ */
+function setupVisibilityToggles(root: ShadowRoot): void {
+  // Load saved preferences
+  loadVisibilityState();
+
+  const toggleAll = root.querySelector('#toggle-all-drawings');
+  const toggleMine = root.querySelector('#toggle-my-drawings');
+  const toggleFollowing = root.querySelector('#toggle-following-only');
+
+  // Update toggles to match state
+  toggleAll?.classList.toggle('active', visibilityState.showAll);
+  toggleMine?.classList.toggle('active', visibilityState.showMine);
+  toggleFollowing?.classList.toggle('active', visibilityState.showFollowing);
+
+  // Show All toggle (master)
+  toggleAll?.addEventListener('click', () => {
+    visibilityState.showAll = !visibilityState.showAll;
+    toggleAll.classList.toggle('active', visibilityState.showAll);
+    document.dispatchEvent(new CustomEvent('oo:visibility:all', {
+      detail: { show: visibilityState.showAll }
+    }));
+  });
+
+  // My Drawings toggle
+  toggleMine?.addEventListener('click', () => {
+    visibilityState.showMine = !visibilityState.showMine;
+    toggleMine.classList.toggle('active', visibilityState.showMine);
+    document.dispatchEvent(new CustomEvent('oo:visibility:mine', {
+      detail: { show: visibilityState.showMine }
+    }));
+  });
+
+  // Following Only toggle
+  toggleFollowing?.addEventListener('click', () => {
+    visibilityState.showFollowing = !visibilityState.showFollowing;
+    toggleFollowing.classList.toggle('active', visibilityState.showFollowing);
+    document.dispatchEvent(new CustomEvent('oo:visibility:following', {
+      detail: { show: visibilityState.showFollowing }
+    }));
+  });
+}
+
+/**
+ * Load visibility state from localStorage
+ */
+function loadVisibilityState(): void {
+  try {
+    const saved = localStorage.getItem('oo_visibility_prefs');
+    if (saved) {
+      const prefs = JSON.parse(saved);
+      visibilityState = {
+        showAll: prefs.showAll ?? true,
+        showMine: prefs.showMine ?? true,
+        showFollowing: prefs.showFollowing ?? false,
+        hiddenUsers: new Set(prefs.hiddenUsers ?? []),
+      };
+    }
+  } catch {
+    // Use defaults
+  }
+}
+
+/**
+ * Render the contributors list with per-user toggles
+ */
+function renderContributorsList(
+  root: ShadowRoot,
+  contributors: { userId: string; displayName: string; photoURL: string }[]
+): void {
+  const container = root.querySelector('#contributors-list');
+  if (!container) return;
+
+  // Filter out current user (they're shown via "My Drawings" toggle)
+  const currentUser = getCurrentUser();
+  const otherContributors = contributors.filter(c => c.userId !== currentUser?.uid);
+
+  if (otherContributors.length === 0) {
+    container.innerHTML = '<div class="no-contributors">No other contributors yet</div>';
+    return;
+  }
+
+  container.innerHTML = otherContributors.map(c => {
+    const isVisible = !visibilityState.hiddenUsers.has(c.userId);
+    const avatarSrc = c.photoURL || '';
+    const avatarFallback = c.displayName?.charAt(0).toUpperCase() || '?';
+
+    return `
+      <div class="contributor-row" data-user-id="${c.userId}">
+        <div class="contributor-info">
+          ${avatarSrc
+            ? `<img src="${avatarSrc}" class="contributor-avatar" alt="${c.displayName}">`
+            : `<div class="contributor-avatar" style="display:flex;align-items:center;justify-content:center;color:#888;font-size:12px;">${avatarFallback}</div>`
+          }
+          <span class="contributor-name">${escapeHtml(c.displayName)}</span>
+        </div>
+        <div class="contributor-toggle">
+          <div class="toggle-switch small ${isVisible ? 'active' : ''}" data-toggle-user="${c.userId}" title="Show/hide this user's drawings"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Add click handlers for per-user toggles
+  container.querySelectorAll('[data-toggle-user]').forEach(toggle => {
+    toggle.addEventListener('click', () => {
+      const userId = toggle.getAttribute('data-toggle-user');
+      if (!userId) return;
+
+      const isActive = toggle.classList.toggle('active');
+      if (isActive) {
+        visibilityState.hiddenUsers.delete(userId);
+      } else {
+        visibilityState.hiddenUsers.add(userId);
+      }
+
+      document.dispatchEvent(new CustomEvent('oo:visibility:user', {
+        detail: { userId, show: isActive }
+      }));
+    });
   });
 }
 
