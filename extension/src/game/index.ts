@@ -239,7 +239,7 @@ export function initGame(): void {
     position: absolute;
     top: 0;
     left: 0;
-    z-index: 2147483638;
+    z-index: 2147483645;
     pointer-events: none;
   `;
 
