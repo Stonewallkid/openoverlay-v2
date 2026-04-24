@@ -115,6 +115,8 @@ let pendingTaggedPlayerId: string | null = null; // Player we just tagged (expli
 let pendingTaggedAt: number = 0; // When we tagged them
 const TAG_COOLDOWN = 3000; // 3 seconds cooldown - needs to be longer than sync latency
 const TAG_NOTIFICATION_DURATION = 5000; // How long to keep taggedPlayerId in sync
+const NTB_FLASH_DURATION = 3000; // "No Tag Backs" flash duration
+let ntbFlashEndTime = 0; // When the NTB flash should end
 
 // Helper to check if current player is "it" (uses Firebase state or local fallback)
 function isCurrentUserIt(): boolean {
@@ -423,6 +425,7 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
                 lastTaggedByPlayerId = id;
                 localTagCooldownUntil = now + TAG_COOLDOWN;
                 showNotification("You're IT!", 'Tag someone!', 2000);
+                showNTBFlash();
                 document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
                   detail: { isTagMode: true, isIt: true, gameActive: true }
                 }));
@@ -635,6 +638,13 @@ function showNotification(text: string, subtext?: string, duration: number = 100
     subtext,
     endTime: performance.now() + duration,
   };
+}
+
+/**
+ * Show the "No Tag Backs" fullscreen flash for 3 seconds.
+ */
+function showNTBFlash(): void {
+  ntbFlashEndTime = performance.now() + NTB_FLASH_DURATION;
 }
 
 function createRestartButton(): void {
@@ -1483,6 +1493,7 @@ function checkPlayerTagCollision(): void {
 
         localTagCooldownUntil = now + TAG_COOLDOWN;
         showNotification('Tagged!', remote.displayName || 'Player', 1500);
+        showNTBFlash();
 
         // Dispatch state change event
         document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
@@ -1505,6 +1516,7 @@ function checkPlayerTagCollision(): void {
         localTagCooldownUntil = now + TAG_COOLDOWN;
         lastTaggedByPlayerId = playerId; // Track who tagged us
         showNotification("You're IT!", 'Tag someone!', 2000);
+        showNTBFlash();
 
         // Dispatch state change event
         document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
@@ -2145,7 +2157,7 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.font = 'bold 16px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
-    gameCtx.fillText('IT', centerX, headY - headRadius - 25);
+    gameCtx.fillText('NTB', centerX, headY - headRadius - 25);
     gameCtx.restore();
   }
 
@@ -2504,7 +2516,7 @@ function drawPlayer(): void {
     gameCtx.font = 'bold 16px sans-serif';
     gameCtx.textAlign = 'center';
     gameCtx.textBaseline = 'middle';
-    gameCtx.fillText('IT', centerX, headY - headRadius - 20);
+    gameCtx.fillText('NTB', centerX, headY - headRadius - 20);
     gameCtx.restore();
   }
 
@@ -2873,6 +2885,7 @@ function drawHUD(): void {
 
   // Notification popup (bottom left)
   drawNotification();
+  drawNTBFlash();
 
   // Countdown overlay
   if (isCountingDown) {
@@ -2933,6 +2946,48 @@ function drawNotification(): void {
   }
 
   gameCtx.textAlign = 'left';
+}
+
+/**
+ * Draw the "No Tag Backs" fullscreen flash overlay.
+ */
+function drawNTBFlash(): void {
+  if (!gameCtx || performance.now() > ntbFlashEndTime) return;
+
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  // Calculate fade based on remaining time
+  const remaining = ntbFlashEndTime - performance.now();
+  const progress = remaining / NTB_FLASH_DURATION;
+
+  // Flash effect - starts bright, fades out
+  const alpha = Math.min(0.7, progress * 0.9);
+
+  // Red flash background
+  gameCtx.save();
+  gameCtx.fillStyle = `rgba(220, 38, 38, ${alpha * 0.3})`;
+  gameCtx.fillRect(scrollX, scrollY, w, h);
+
+  // "NO TAG BACKS" text with glow
+  const textAlpha = Math.min(1, progress * 1.5);
+  gameCtx.font = 'bold 72px sans-serif';
+  gameCtx.textAlign = 'center';
+  gameCtx.textBaseline = 'middle';
+
+  // Glow effect
+  gameCtx.shadowColor = '#ff0000';
+  gameCtx.shadowBlur = 30;
+  gameCtx.fillStyle = `rgba(255, 255, 255, ${textAlpha})`;
+  gameCtx.fillText('NO TAG BACKS', scrollX + w / 2, scrollY + h / 2);
+
+  // Second pass for stronger glow
+  gameCtx.shadowBlur = 15;
+  gameCtx.fillText('NO TAG BACKS', scrollX + w / 2, scrollY + h / 2);
+
+  gameCtx.restore();
 }
 
 function drawBuildModeUI(): void {
