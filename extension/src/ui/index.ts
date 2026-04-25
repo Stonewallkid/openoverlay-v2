@@ -1736,11 +1736,52 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     dispatchSettingsChange();
   });
 
-  // Text input
+  // Text input - auto-place text in center when user starts typing
   const textInput = toolbar.querySelector('#oo-text-input') as HTMLInputElement;
+  let liveTextId: string | null = null; // Track the text we're currently editing
+
   textInput?.addEventListener('input', () => {
-    pendingText = textInput.value;
+    const newText = textInput.value;
+    pendingText = newText;
+
+    console.log('[OpenOverlay] Text input:', newText, 'liveTextId:', liveTextId);
+
+    if (newText.trim() && !liveTextId) {
+      // First character typed - create text in center of screen
+      console.log('[OpenOverlay] Creating text in center');
+      document.dispatchEvent(new CustomEvent('oo:textcreate', {
+        detail: { text: newText }
+      }));
+    } else if (newText.trim() && liveTextId) {
+      // Update existing text as user types
+      document.dispatchEvent(new CustomEvent('oo:textupdate', {
+        detail: { text: newText }
+      }));
+    } else if (!newText.trim() && liveTextId) {
+      // Text cleared - delete the text item
+      document.dispatchEvent(new CustomEvent('oo:textdelete', {
+        detail: { id: liveTextId }
+      }));
+      liveTextId = null;
+    }
+
     dispatchSettingsChange();
+  });
+
+  // Track when text is created
+  document.addEventListener('oo:textcreated', ((e: CustomEvent) => {
+    console.log('[OpenOverlay] Text created with id:', e.detail.id);
+    liveTextId = e.detail.id;
+    // Blur the input so canvas can receive pointer events for dragging
+    textInput?.blur();
+  }) as EventListener);
+
+  // Reset when text is saved/cleared
+  document.addEventListener('oo:textsaved', () => {
+    console.log('[OpenOverlay] Text saved, resetting');
+    liveTextId = null;
+    if (textInput) textInput.value = '';
+    pendingText = '';
   });
 
   // Quick color swatches

@@ -172,7 +172,7 @@ function getSelector(el: Element): string {
 function findAnchorElement(x: number, y: number): Element | null {
   if (canvas) canvas.style.pointerEvents = 'none';
   const elements = document.elementsFromPoint(x, y);
-  if (canvas) canvas.style.pointerEvents = currentMode === 'draw' ? 'auto' : 'none';
+  if (canvas) canvas.style.pointerEvents = (currentMode === 'draw' || currentMode === 'text') ? 'auto' : 'none';
 
   for (const el of elements) {
     if (el.id === 'oo-canvas' || el.id === 'openoverlay-ui') continue;
@@ -363,6 +363,89 @@ export function initCanvas(): void {
         textItem.style = e.detail.textStyle;
         redraw();
       }
+    }
+  }) as EventListener);
+
+  // Auto-create text in center when user starts typing
+  document.addEventListener('oo:textcreate', ((e: CustomEvent) => {
+    console.log('[OpenOverlay] oo:textcreate received, currentMode:', currentMode);
+    if (currentMode !== 'text') return;
+
+    // Find anchor at center of viewport
+    const centerX = window.innerWidth / 2;
+    const centerY = window.innerHeight / 2;
+    const anchor = findAnchorElement(centerX, centerY);
+    if (!anchor) {
+      console.log('[OpenOverlay] No anchor found at center');
+      return;
+    }
+
+    const rect = anchor.getBoundingClientRect();
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+
+    const elemPageX = rect.left + scrollX;
+    const elemPageY = rect.top + scrollY;
+
+    // Center the text in viewport (convert to relative coords)
+    const relX = (centerX + scrollX - elemPageX) / rect.width;
+    const relY = (centerY + scrollY - elemPageY) / rect.height;
+
+    const newId = generateId();
+    const textItem: TextItem = {
+      type: 'text',
+      id: newId,
+      anchorSelector: getSelector(anchor),
+      x: relX,
+      y: relY,
+      anchorBounds: {
+        x: elemPageX,
+        y: elemPageY,
+        width: rect.width,
+        height: rect.height,
+      },
+      text: e.detail.text,
+      color: getColor(),
+      size: getSize(),
+      opacity: getOpacity(),
+      style: getTextStyle(),
+      rotation: 0,
+      layer: getLayer(),
+    };
+
+    items.push(textItem);
+    selectedTextId = textItem.id;
+    console.log('[OpenOverlay] Text created:', newId);
+
+    // Notify UI that text was created
+    document.dispatchEvent(new CustomEvent('oo:textcreated', {
+      detail: { id: newId }
+    }));
+
+    redraw();
+  }) as EventListener);
+
+  // Update text content as user types
+  document.addEventListener('oo:textupdate', ((e: CustomEvent) => {
+    if (!selectedTextId) return;
+
+    const textItem = items.find(i => i.type === 'text' && i.id === selectedTextId) as TextItem | undefined;
+    if (textItem) {
+      textItem.text = e.detail.text;
+      redraw();
+    }
+  }) as EventListener);
+
+  // Delete text when input is cleared
+  document.addEventListener('oo:textdelete', ((e: CustomEvent) => {
+    const id = e.detail.id;
+    const index = items.findIndex(i => i.id === id);
+    if (index !== -1) {
+      items.splice(index, 1);
+      if (selectedTextId === id) {
+        selectedTextId = null;
+      }
+      redraw();
     }
   }) as EventListener);
 
@@ -608,58 +691,61 @@ function handleTextPlacement(e: PointerEvent): void {
     return;
   }
 
-  // If no text input, just deselect
+  // Text is now auto-created when typing, so clicking just deselects
+  // If there's a selected text, clicking away deselects it (keeps the text)
+  if (selectedTextId) {
+    selectedTextId = null;
+    interactionMode = 'none';
+    // Clear the text input since text is already placed
+    clearPendingText();
+    document.dispatchEvent(new CustomEvent('oo:textsaved'));
+    redraw();
+    return;
+  }
+
+  // Fallback: if there's pending text but no selection (edge case), place at click
   const text = getPendingText();
-  if (!text || !text.trim()) {
-    if (selectedTextId) {
-      selectedTextId = null;
-      interactionMode = 'none';
-      redraw();
-    }
-    return;
+  if (text && text.trim()) {
+    const anchor = findAnchorElement(e.clientX, e.clientY);
+    if (!anchor) return;
+
+    const rect = anchor.getBoundingClientRect();
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+
+    const elemPageX = rect.left + scrollX;
+    const elemPageY = rect.top + scrollY;
+
+    const relX = (e.pageX - elemPageX) / rect.width;
+    const relY = (e.pageY - elemPageY) / rect.height;
+
+    const textItem: TextItem = {
+      type: 'text',
+      id: generateId(),
+      anchorSelector: getSelector(anchor),
+      x: relX,
+      y: relY,
+      anchorBounds: {
+        x: elemPageX,
+        y: elemPageY,
+        width: rect.width,
+        height: rect.height,
+      },
+      text: text,
+      color: getColor(),
+      size: getSize(),
+      opacity: getOpacity(),
+      style: getTextStyle(),
+      rotation: 0,
+      layer: getLayer(),
+    };
+
+    items.push(textItem);
+    selectedTextId = textItem.id;
+    clearPendingText();
+    document.dispatchEvent(new CustomEvent('oo:textsaved'));
+    redraw();
   }
-
-  // Place new text
-  const anchor = findAnchorElement(e.clientX, e.clientY);
-  if (!anchor) {
-    return;
-  }
-
-  const rect = anchor.getBoundingClientRect();
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
-
-  const elemPageX = rect.left + scrollX;
-  const elemPageY = rect.top + scrollY;
-
-  const relX = (e.pageX - elemPageX) / rect.width;
-  const relY = (e.pageY - elemPageY) / rect.height;
-
-  const textItem: TextItem = {
-    type: 'text',
-    id: generateId(),
-    anchorSelector: getSelector(anchor),
-    x: relX,
-    y: relY,
-    anchorBounds: {
-      x: elemPageX,
-      y: elemPageY,
-      width: rect.width,
-      height: rect.height,
-    },
-    text: text,
-    color: getColor(),
-    size: getSize(),
-    opacity: getOpacity(),
-    style: getTextStyle(),
-    rotation: 0,
-    layer: getLayer(),
-  };
-
-  items.push(textItem);
-  selectedTextId = textItem.id;
-  clearPendingText();
-  redraw();
 }
 
 function getTextPosition(item: TextItem): { x: number; y: number } | null {
@@ -1448,8 +1534,10 @@ function redraw(): void {
 
     if (item.type === 'text') {
       drawTextSaved(item, rect);
-      // Draw selection handles if selected (only for own items, only on main canvas)
-      if (!isOtherUser && item.id === selectedTextId && targetCtx === saveCtx) {
+      // Draw selection handles if selected (only for own items)
+      // Note: removed targetCtx === saveCtx check since we always render to ctx for normal/foreground
+      if (!isOtherUser && item.id === selectedTextId) {
+        console.log('[OpenOverlay] Drawing selection for text:', item.id);
         drawTextSelection(item, rect);
       }
     } else if (item.type === 'shape') {
@@ -1532,6 +1620,8 @@ function redraw(): void {
 
 function drawTextSelection(item: TextItem, rect: { x: number; y: number; width: number; height: number }): void {
   if (!ctx) return;
+
+  console.log('[OpenOverlay] Drawing text selection for:', item.id, 'selectedTextId:', selectedTextId);
 
   const x = rect.x + item.x * rect.width;
   const y = rect.y + item.y * rect.height;
@@ -1787,6 +1877,9 @@ async function saveDrawing(): Promise<void> {
 
   // Clear text selection
   selectedTextId = null;
+
+  // Notify UI to reset text input state
+  document.dispatchEvent(new CustomEvent('oo:textsaved'));
 
   const pageKey = getPageKey();
   const data = JSON.stringify(items);

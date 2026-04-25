@@ -128,6 +128,12 @@ const TAG_COOLDOWN = 3000; // 3 seconds cooldown - needs to be longer than sync 
 const TAG_NOTIFICATION_DURATION = 5000; // How long to keep taggedPlayerId in sync
 const NTB_FLASH_DURATION = 3000; // "No Tag Backs" flash duration
 let ntbFlashEndTime = 0; // When the NTB flash should end
+const MODE_INFO_DURATION = 4000; // How long to show mode info box
+let modeInfoEndTime = 0; // When the mode info should hide
+
+function showModeInfo(): void {
+  modeInfoEndTime = performance.now() + MODE_INFO_DURATION;
+}
 const PLAYER_STALE_TIMEOUT = 5000; // Remove players who haven't updated in 5 seconds
 
 // Helper to check if current player is "it" (uses Firebase state or local fallback)
@@ -428,6 +434,11 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
   gameMode = mode;
   if (tool) buildTool = tool as any;
   if (newPlayMode) playMode = newPlayMode;
+
+  // Flash mode info when entering play mode
+  if (mode === 'play') {
+    showModeInfo();
+  }
 
   if (gameCanvas) {
     gameCanvas.style.pointerEvents = mode === 'build' ? 'auto' : 'none';
@@ -2889,44 +2900,56 @@ function drawHUD(): void {
 
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
+  const now = performance.now();
+  const showModeBox = now < modeInfoEndTime;
 
   gameCtx.save();
 
-  // HUD background - wider for race mode to show lives
-  const hudWidth = playMode === 'race' ? 260 : 180;
-  gameCtx.fillStyle = 'rgba(0,0,0,0.8)';
-  gameCtx.fillRect(scrollX + 10, scrollY + 10, hudWidth, 70);
+  // Only show full HUD box during mode info flash
+  if (showModeBox) {
+    // HUD background - wider for race mode to show lives
+    const hudWidth = playMode === 'race' ? 260 : 180;
+    gameCtx.fillStyle = 'rgba(0,0,0,0.8)';
+    gameCtx.fillRect(scrollX + 10, scrollY + 10, hudWidth, 70);
 
-  // Mode indicator
-  let modeText = 'EXPLORE MODE';
-  let modeColor = '#22c55e'; // green
-  if (isTagMode) {
-    modeText = 'TAG MODE';
-    modeColor = '#f97316'; // orange
-  } else if (playMode === 'race') {
-    modeText = 'RACE MODE';
-    modeColor = '#ef4444'; // red
+    // Mode indicator
+    let modeText = 'EXPLORE MODE';
+    let modeColor = '#22c55e'; // green
+    if (isTagMode) {
+      modeText = 'TAG MODE';
+      modeColor = '#f97316'; // orange
+    } else if (playMode === 'race') {
+      modeText = 'RACE MODE';
+      modeColor = '#ef4444'; // red
+    }
+    gameCtx.fillStyle = modeColor;
+    gameCtx.font = 'bold 11px sans-serif';
+    gameCtx.fillText(modeText, scrollX + 20, scrollY + 25);
   }
-  gameCtx.fillStyle = modeColor;
-  gameCtx.font = 'bold 11px sans-serif';
-  gameCtx.fillText(modeText, scrollX + 20, scrollY + 25);
 
   if (playMode === 'race') {
+    // Minimal background for timer/lives when mode info has faded
+    if (!showModeBox) {
+      gameCtx.fillStyle = 'rgba(0,0,0,0.7)';
+      gameCtx.fillRect(scrollX + 10, scrollY + 10, 250, 50);
+    }
+
     // Timer
     const timeStr = (raceTime / 1000).toFixed(2);
     gameCtx.fillStyle = '#fff';
     gameCtx.font = 'bold 20px monospace';
     const timerText = isCountingDown ? 'Ready...' : raceStarted ? `${timeStr}s` : lives <= 0 ? 'GAME OVER' : `${timeStr}s`;
-    gameCtx.fillText(timerText, scrollX + 20, scrollY + 48);
+    gameCtx.fillText(timerText, scrollX + 20, scrollY + (showModeBox ? 48 : 38));
 
     // Lives display - stick figure icons
+    const livesY = showModeBox ? 48 : 38;
     gameCtx.font = '14px sans-serif';
     gameCtx.fillStyle = '#888';
-    gameCtx.fillText('Lives:', scrollX + 155, scrollY + 48);
+    gameCtx.fillText('Lives:', scrollX + 155, scrollY + livesY);
 
     for (let i = 0; i < maxLives; i++) {
       const lifeX = scrollX + 200 + i * 20;
-      const lifeY = scrollY + 40;
+      const lifeY = scrollY + (showModeBox ? 40 : 30);
 
       if (i < lives) {
         // Alive - draw stick figure
@@ -2966,8 +2989,8 @@ function drawHUD(): void {
       }
     }
 
-    // Best time
-    if (currentCourse.bestTime) {
+    // Best time - only show during mode info flash
+    if (showModeBox && currentCourse.bestTime) {
       gameCtx.fillStyle = '#fbbf24';
       gameCtx.font = '12px monospace';
       gameCtx.fillText(`Best: ${(currentCourse.bestTime / 1000).toFixed(2)}s`, scrollX + 20, scrollY + 66);
@@ -2977,22 +3000,31 @@ function drawHUD(): void {
     if (lives <= 0) {
       gameCtx.fillStyle = '#ef4444';
       gameCtx.font = 'bold 14px sans-serif';
-      gameCtx.fillText('GAME OVER - Press Play to retry', scrollX + 20, scrollY + 100);
+      gameCtx.fillText('GAME OVER - Press Play to retry', scrollX + 20, scrollY + (showModeBox ? 100 : 70));
     }
   } else if (isTagMode) {
+    // Minimal background for tag status when mode info has faded
+    if (!showModeBox) {
+      gameCtx.fillStyle = 'rgba(0,0,0,0.7)';
+      gameCtx.fillRect(scrollX + 10, scrollY + 10, 200, 30);
+    }
+
     // Tag mode - show who's IT (use helper that handles Firebase fallback)
     const isLocalPlayerIt = isCurrentUserIt();
+    const tagTextY = showModeBox ? 48 : 32;
 
     if (isLocalPlayerIt) {
       gameCtx.fillStyle = '#ff4444';
       gameCtx.font = 'bold 16px sans-serif';
-      gameCtx.fillText("You're IT! Tag someone!", scrollX + 20, scrollY + 48);
+      gameCtx.fillText("You're IT! Tag someone!", scrollX + 20, scrollY + tagTextY);
     } else {
-      // Find who is IT - first check tagGameState (authoritative), then player sync
+      // Find who is IT - check multiple sources
       let itPlayerName = '';
+      let someoneIsIt = false;
 
-      // Method 1: Use tagGameState.itPlayerId to find the IT player
+      // Method 1: Use tagGameState.itPlayerId (authoritative Firebase source)
       if (tagGameState?.itPlayerId) {
+        someoneIsIt = true;
         for (const [id, rp] of otherPlayers) {
           if (id === tagGameState.itPlayerId) {
             itPlayerName = rp.displayName || 'Another player';
@@ -3001,32 +3033,47 @@ function drawHUD(): void {
         }
       }
 
-      // Method 2: Fallback to checking rp.isIt flag
+      // Method 2: Check rp.isIt flag in player sync data
       if (!itPlayerName) {
         for (const [, rp] of otherPlayers) {
           if (rp.isIt) {
             itPlayerName = rp.displayName || 'Another player';
+            someoneIsIt = true;
             break;
           }
         }
       }
 
+      // Method 3: Check if localIsIt is true (we might be IT but Firebase hasn't synced)
+      if (!someoneIsIt && localIsIt) {
+        // This shouldn't happen (we'd be in the if branch above), but just in case
+        someoneIsIt = true;
+      }
+
       if (itPlayerName) {
         gameCtx.fillStyle = '#22c55e';
         gameCtx.font = 'bold 16px sans-serif';
-        gameCtx.fillText('Run! ' + itPlayerName + ' is IT!', scrollX + 20, scrollY + 48);
+        gameCtx.fillText('Run! ' + itPlayerName + ' is IT!', scrollX + 20, scrollY + tagTextY);
+      } else if (someoneIsIt) {
+        // We know someone is IT from Firebase but can't find their name yet
+        gameCtx.fillStyle = '#22c55e';
+        gameCtx.font = 'bold 16px sans-serif';
+        gameCtx.fillText('Run! Someone is IT!', scrollX + 20, scrollY + tagTextY);
       } else {
         gameCtx.fillStyle = '#fff';
         gameCtx.font = '16px sans-serif';
-        gameCtx.fillText('Waiting for IT player...', scrollX + 20, scrollY + 48);
+        gameCtx.fillText('Waiting for IT player...', scrollX + 20, scrollY + tagTextY);
       }
     }
 
-    gameCtx.fillStyle = '#888';
-    gameCtx.font = '12px sans-serif';
-    gameCtx.fillText('Touch another player to tag them', scrollX + 20, scrollY + 66);
-  } else {
-    // Explore mode - just show simple message
+    // Only show hint during mode info flash
+    if (showModeBox) {
+      gameCtx.fillStyle = '#888';
+      gameCtx.font = '12px sans-serif';
+      gameCtx.fillText('Touch another player to tag them', scrollX + 20, scrollY + 66);
+    }
+  } else if (showModeBox) {
+    // Explore mode - only show during mode info flash
     gameCtx.fillStyle = '#fff';
     gameCtx.font = '16px sans-serif';
     gameCtx.fillText('Explore freely!', scrollX + 20, scrollY + 48);
@@ -3036,10 +3083,12 @@ function drawHUD(): void {
     gameCtx.fillText('No timer, unlimited respawns', scrollX + 20, scrollY + 66);
   }
 
-  // Controls hint
-  gameCtx.fillStyle = '#666';
-  gameCtx.font = '11px sans-serif';
-  gameCtx.fillText('WASD/Arrows, Space=jump, L=leaderboard', scrollX + 10, scrollY + 95);
+  // Controls hint - only show during mode info flash
+  if (showModeBox) {
+    gameCtx.fillStyle = '#666';
+    gameCtx.font = '11px sans-serif';
+    gameCtx.fillText('WASD/Arrows, Space=jump, L=leaderboard', scrollX + 10, scrollY + 95);
+  }
 
   // Notification popup (bottom left)
   drawNotification();
@@ -3665,6 +3714,7 @@ export function toggleTagMode(): void {
   if (!isTagMode) {
     // Start or join tag game
     isTagMode = true;
+    showModeInfo(); // Flash mode info
     const pageKey = getPageKey();
     console.log('[OpenOverlay] Starting/joining tag game on page:', pageKey);
 
@@ -3715,6 +3765,7 @@ export function toggleTagMode(): void {
   } else {
     // Leave tag game
     isTagMode = false;
+    showModeInfo(); // Flash mode info (back to explore)
     localIsIt = false;
     lastTaggedByPlayerId = null;
     pendingTaggedPlayerId = null;
