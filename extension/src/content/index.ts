@@ -9,6 +9,7 @@ import { initAnnotations } from '@/annotations';
 import { initGame } from '@/game';
 import { initAuth } from '@/auth';
 import { initFirestore } from '@/db';
+import { shouldShowOnboarding, startOnboarding, showReturningUserWave } from '@/onboarding';
 
 // Prevent double injection
 if ((window as any).__OPENOVERLAY_V2__) {
@@ -39,6 +40,16 @@ if ((window as any).__OPENOVERLAY_V2__) {
       initAnnotations();
       initGame();
       console.log('[OpenOverlay] Ready!');
+
+      // Trigger onboarding after a short delay
+      setTimeout(() => {
+        if (shouldShowOnboarding()) {
+          startOnboarding();
+        } else {
+          // Show quick wave for returning users
+          showReturningUserWave();
+        }
+      }, 1500);
     } catch (err) {
       console.error('[OpenOverlay] UI init error:', err);
     }

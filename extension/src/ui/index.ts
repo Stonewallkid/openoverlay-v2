@@ -3344,3 +3344,19 @@ export function clearPendingText(): void {
 export function getShadowRoot(): ShadowRoot | null {
   return shadowRoot;
 }
+
+/**
+ * Open the FAB menu (for onboarding)
+ */
+export function openMenu(): void {
+  if (!isMenuOpen) {
+    toggleMenu();
+  }
+}
+
+/**
+ * Set mode externally (for onboarding)
+ */
+export function setModeExternal(mode: 'none' | 'draw' | 'text' | 'game'): void {
+  setMode(mode);
+}
