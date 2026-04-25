@@ -65,6 +65,27 @@ const SHAPE_TOOLS = [
   { id: 'star', label: '☆', title: 'Star' },
 ];
 
+// Emoji stickers - organized by category
+const EMOJI_STICKERS = [
+  // Faces
+  '😀', '😂', '🤣', '😍', '🥰', '😎', '🤩', '😜',
+  '😭', '😤', '🤯', '🥺', '😱', '🤮', '💀', '👻',
+  // Gestures
+  '👍', '👎', '👏', '🙌', '🤝', '✌️', '🤟', '👋',
+  '💪', '🫶', '🙏', '👀', '🧠', '💅', '🦾', '🫡',
+  // Hearts & symbols
+  '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '💔',
+  '⭐', '✨', '🔥', '💯', '💥', '💫', '🎯', '🏆',
+  // Animals
+  '🐶', '🐱', '🐻', '🦊', '🐸', '🐵', '🦄', '🐝',
+  // Food & objects
+  '🍕', '🍔', '🌮', '🍩', '☕', '🎂', '🍿', '🥤',
+  // Activities
+  '⚽', '🏀', '🎮', '🎸', '🎤', '🎬', '📸', '💻',
+  // Misc
+  '🚀', '💎', '🎁', '🎈', '🎉', '🪄', '⚡', '🌈',
+];
+
 const STYLES = `
   * {
     box-sizing: border-box;
@@ -488,6 +509,75 @@ const STYLES = `
 
   .text-input::placeholder {
     color: #666;
+  }
+
+  .emoji-btn {
+    width: 36px;
+    height: 32px;
+    background: #222;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .emoji-btn:hover {
+    background: #333;
+  }
+
+  .emoji-picker {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    margin-bottom: 8px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+  }
+
+  .emoji-picker.show {
+    display: block;
+  }
+
+  .emoji-picker-header {
+    font-size: 10px;
+    color: #888;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #333;
+  }
+
+  .emoji-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 2px;
+  }
+
+  .emoji-item {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    cursor: pointer;
+    border-radius: 4px;
+    background: transparent;
+    border: none;
+  }
+
+  .emoji-item:hover {
+    background: #333;
   }
 
   .text-styles {
@@ -1727,9 +1817,14 @@ export function initUI(): void {
     </div>
 
     <!-- TEXT MODE CONTROLS -->
-    <div class="text-controls" id="text-controls">
+    <div class="text-controls" id="text-controls" style="position: relative;">
+      <div class="emoji-picker" id="oo-emoji-picker">
+        <div class="emoji-picker-header">Emojis & Stickers</div>
+        <div class="emoji-grid" id="oo-emoji-grid"></div>
+      </div>
       <div class="toolbar-row">
-        <input type="text" class="text-input" id="oo-text-input" placeholder="Type text...">
+        <button class="emoji-btn" id="oo-emoji-btn" title="Add emoji">😀</button>
+        <input type="text" class="text-input" id="oo-text-input" placeholder="Type or pick emoji...">
         <div class="text-styles" id="oo-text-styles">
           ${TEXT_STYLES.map(s => `
             <button class="text-style-btn ${s.id === 'normal' ? 'active' : ''}"
@@ -1901,6 +1996,55 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     fillToggle.classList.toggle('active', shapeFilled);
     (fillToggle as HTMLElement).textContent = shapeFilled ? '◼' : '◧';
     dispatchSettingsChange();
+  });
+
+  // Emoji picker setup
+  const emojiBtn = toolbar.querySelector('#oo-emoji-btn') as HTMLButtonElement;
+  const emojiPicker = toolbar.querySelector('#oo-emoji-picker') as HTMLElement;
+  const emojiGrid = toolbar.querySelector('#oo-emoji-grid') as HTMLElement;
+
+  // Populate emoji grid
+  if (emojiGrid) {
+    emojiGrid.innerHTML = EMOJI_STICKERS.map(emoji =>
+      `<button class="emoji-item" data-emoji="${emoji}">${emoji}</button>`
+    ).join('');
+  }
+
+  // Toggle emoji picker
+  emojiBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    emojiPicker?.classList.toggle('show');
+  });
+
+  // Handle emoji selection
+  emojiGrid?.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    const emoji = target.dataset.emoji;
+    if (emoji) {
+      const textInput = toolbar.querySelector('#oo-text-input') as HTMLInputElement;
+      if (textInput) {
+        // Insert emoji at cursor position or append
+        const start = textInput.selectionStart || textInput.value.length;
+        const end = textInput.selectionEnd || textInput.value.length;
+        const before = textInput.value.substring(0, start);
+        const after = textInput.value.substring(end);
+        textInput.value = before + emoji + after;
+        textInput.focus();
+        // Trigger input event to create/update text
+        textInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      emojiPicker?.classList.remove('show');
+    }
+  });
+
+  // Close emoji picker when clicking outside
+  document.addEventListener('click', (e) => {
+    if (emojiPicker?.classList.contains('show')) {
+      const target = e.target as Node;
+      if (!emojiPicker.contains(target) && target !== emojiBtn) {
+        emojiPicker.classList.remove('show');
+      }
+    }
   });
 
   // Text input - auto-place text in center when user starts typing
