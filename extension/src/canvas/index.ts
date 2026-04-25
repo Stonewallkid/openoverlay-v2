@@ -3,7 +3,7 @@
  * Handles freehand drawing with multiple brush styles
  */
 
-import { getColor, getSize, getOpacity, getBrush, getEraser, getEraserLayer, getLayer, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
+import { getColor, getSize, getOpacity, getBrush, getEraser, getLayer, getTextStyle, getPendingText, clearPendingText, getShape, getShapeFilled } from '@/ui';
 import { saveDrawingToCloud, loadDrawingsFromCloud, deleteDrawingFromCloud, subscribeToDrawings, unsubscribeFromDrawings, isFirestoreAvailable, isLoggedIn, getFollowing } from '@/db';
 import { onAuthStateChanged, getCurrentUser } from '@/auth';
 
@@ -921,163 +921,33 @@ function onPointerUp(): void {
     const elemPageX = freshRect.left + scrollX;
     const elemPageY = freshRect.top + scrollY;
 
-    // If eraser is active, remove items instead of adding a stroke
-    if (getEraser()) {
-      eraseItemsUnderPath(currentStroke, getSize());
-    } else {
-      const relativePoints = currentStroke.map(p => ({
-        x: (p.x - elemPageX) / freshRect.width,
-        y: (p.y - elemPageY) / freshRect.height,
-      }));
+    const relativePoints = currentStroke.map(p => ({
+      x: (p.x - elemPageX) / freshRect.width,
+      y: (p.y - elemPageY) / freshRect.height,
+    }));
 
-      items.push({
-        type: 'stroke',
-        anchorSelector: currentAnchor.selector,
-        points: relativePoints,
-        anchorBounds: {
-          x: elemPageX,
-          y: elemPageY,
-          width: freshRect.width,
-          height: freshRect.height,
-        },
-        color: getColor(),
-        width: getSize(),
-        opacity: getOpacity(),
-        brush: getBrush(),
-        eraser: false,
-        layer: getLayer(),
-      });
-    }
+    items.push({
+      type: 'stroke',
+      anchorSelector: currentAnchor.selector,
+      points: relativePoints,
+      anchorBounds: {
+        x: elemPageX,
+        y: elemPageY,
+        width: freshRect.width,
+        height: freshRect.height,
+      },
+      color: getColor(),
+      width: getSize(),
+      opacity: getOpacity(),
+      brush: getBrush(),
+      eraser: getEraser(),
+      layer: getLayer(),
+    });
   }
 
   currentStroke = [];
   currentAnchor = null;
   redraw();
-}
-
-/**
- * Erase items that intersect with the eraser path
- * Respects current mode (draw = strokes only, text = text only) and eraser layer
- */
-function eraseItemsUnderPath(path: { x: number; y: number }[], eraserWidth: number): void {
-  const eraserLayer = getEraserLayer();
-  const halfWidth = eraserWidth / 2;
-
-  // Determine which types to erase based on current mode
-  // In draw mode: erase strokes and shapes
-  // In text mode: erase text
-  const eraseStrokes = currentMode === 'draw';
-  const eraseText = currentMode === 'text';
-
-  // Find items to remove
-  const itemsToRemove: number[] = [];
-
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-
-    // Check type filter
-    if (item.type === 'stroke' || item.type === 'shape') {
-      if (!eraseStrokes) continue;
-    } else if (item.type === 'text') {
-      if (!eraseText) continue;
-    }
-
-    // Check layer filter
-    const itemLayer = (item as any).layer || 'normal';
-    if (eraserLayer !== 'all' && itemLayer !== eraserLayer) continue;
-
-    // Check if eraser path intersects with item
-    if (doesPathIntersectItem(path, halfWidth, item)) {
-      itemsToRemove.push(i);
-    }
-  }
-
-  // Remove items (in reverse order to maintain indices)
-  for (let i = itemsToRemove.length - 1; i >= 0; i--) {
-    items.splice(itemsToRemove[i], 1);
-  }
-
-  if (itemsToRemove.length > 0) {
-    console.log('[OpenOverlay] Erased', itemsToRemove.length, 'items');
-  }
-}
-
-/**
- * Check if an eraser path intersects with an item
- */
-function doesPathIntersectItem(path: { x: number; y: number }[], halfWidth: number, item: DrawItem): boolean {
-  // Get item bounds in page coordinates
-  let el: Element | null = null;
-  try {
-    el = document.querySelector(item.anchorSelector);
-  } catch { }
-  if (!el) return false;
-
-  const rect = el.getBoundingClientRect();
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
-  const elemPageX = rect.left + scrollX;
-  const elemPageY = rect.top + scrollY;
-
-  if (item.type === 'stroke') {
-    // Check if eraser path intersects with any point of the stroke
-    const strokePoints = item.points.map(p => ({
-      x: elemPageX + p.x * rect.width,
-      y: elemPageY + p.y * rect.height,
-    }));
-
-    for (const eraserPoint of path) {
-      for (const strokePoint of strokePoints) {
-        const dist = Math.hypot(eraserPoint.x - strokePoint.x, eraserPoint.y - strokePoint.y);
-        if (dist < halfWidth + item.width / 2) {
-          return true;
-        }
-      }
-    }
-  } else if (item.type === 'text') {
-    // Get text bounds
-    const textX = elemPageX + item.x * rect.width;
-    const textY = elemPageY + item.y * rect.height;
-    const textSize = item.size || 32;
-
-    // Estimate text width (rough)
-    const textWidth = item.text.length * textSize * 0.6;
-    const textHeight = textSize;
-
-    // Check if eraser path intersects with text bounds
-    for (const eraserPoint of path) {
-      if (eraserPoint.x >= textX - halfWidth &&
-          eraserPoint.x <= textX + textWidth + halfWidth &&
-          eraserPoint.y >= textY - textHeight - halfWidth &&
-          eraserPoint.y <= textY + halfWidth) {
-        return true;
-      }
-    }
-  } else if (item.type === 'shape') {
-    // Get shape bounds
-    const shapeItem = item as ShapeItem;
-    const x1 = elemPageX + shapeItem.x1 * rect.width;
-    const y1 = elemPageY + shapeItem.y1 * rect.height;
-    const x2 = elemPageX + shapeItem.x2 * rect.width;
-    const y2 = elemPageY + shapeItem.y2 * rect.height;
-
-    const minX = Math.min(x1, x2);
-    const maxX = Math.max(x1, x2);
-    const minY = Math.min(y1, y2);
-    const maxY = Math.max(y1, y2);
-
-    // Check if eraser path intersects with shape bounds
-    for (const eraserPoint of path) {
-      if (eraserPoint.x >= minX - halfWidth &&
-          eraserPoint.x <= maxX + halfWidth &&
-          eraserPoint.y >= minY - halfWidth &&
-          eraserPoint.y <= maxY + halfWidth) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 function findTextAtPoint(x: number, y: number): TextItem | null {
@@ -1142,21 +1012,8 @@ function drawStrokeLive(
   ctx.globalAlpha = opacity;
 
   if (eraser) {
-    // Draw eraser preview as a dashed red line
-    ctx.globalAlpha = 0.5;
-    ctx.strokeStyle = '#ff4444';
-    ctx.lineWidth = width;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.setLineDash([5, 5]);
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
-    }
-    ctx.stroke();
-    ctx.restore();
-    return;
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1;
   }
 
   switch (brush) {
@@ -1196,10 +1053,9 @@ function drawStrokeSaved(stroke: Stroke, rect: { x: number; y: number; width: nu
   ctx.save();
   ctx.globalAlpha = stroke.opacity;
 
-  // Legacy eraser strokes (from old data) - skip them
   if (stroke.eraser) {
-    ctx.restore();
-    return;
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1;
   }
 
   switch (stroke.brush) {

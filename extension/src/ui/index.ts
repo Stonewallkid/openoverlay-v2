@@ -18,7 +18,6 @@ let currentShape: string = 'none'; // 'none' | 'rectangle' | 'circle' | 'line' |
 let shapeFilled: boolean = false;
 let isEraser = false;
 let drawLayer: 'normal' | 'background' | 'foreground' = 'normal';
-let eraserLayer: 'all' | 'normal' | 'background' | 'foreground' = 'all';
 let pendingText: string = '';
 let gameSubMode: 'play' | 'build' = 'play';
 let gameBuildTool: string = 'spawn';
@@ -374,12 +373,6 @@ const STYLES = `
     color: white;
   }
 
-  .eraser-group {
-    position: relative;
-    display: flex;
-    gap: 2px;
-  }
-
   .eraser-btn {
     width: 36px;
     height: 32px;
@@ -398,46 +391,6 @@ const STYLES = `
   }
 
   .eraser-btn.active {
-    background: #ef4444;
-    color: white;
-  }
-
-  .eraser-layer-picker {
-    display: none;
-    position: absolute;
-    bottom: 100%;
-    left: 0;
-    margin-bottom: 4px;
-    background: #1a1a1a;
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 4px;
-    z-index: 100;
-  }
-
-  .eraser-layer-picker.show {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .eraser-layer-btn {
-    padding: 6px 10px;
-    background: transparent;
-    border: none;
-    color: #ccc;
-    font-size: 12px;
-    cursor: pointer;
-    border-radius: 4px;
-    text-align: left;
-    white-space: nowrap;
-  }
-
-  .eraser-layer-btn:hover {
-    background: #333;
-  }
-
-  .eraser-layer-btn.active {
     background: #ef4444;
     color: white;
   }
@@ -1869,15 +1822,7 @@ export function initUI(): void {
                     data-brush="${b.id}" title="${b.title}">${b.label}</button>
           `).join('')}
         </div>
-        <div class="eraser-group">
-          <button class="eraser-btn" id="oo-eraser" title="Eraser (click to toggle, hold for layers)">🧹</button>
-          <div class="eraser-layer-picker" id="oo-eraser-layers">
-            <button class="eraser-layer-btn active" data-layer="all">All Layers</button>
-            <button class="eraser-layer-btn" data-layer="foreground">Foreground Only</button>
-            <button class="eraser-layer-btn" data-layer="normal">Regular Only</button>
-            <button class="eraser-layer-btn" data-layer="background">Background Only</button>
-          </div>
-        </div>
+        <button class="eraser-btn" id="oo-eraser" title="Eraser">🧹</button>
         <button class="tool-btn" id="oo-layer-bg" title="Background">⬇️</button>
         <button class="tool-btn" id="oo-layer-fg" title="Foreground">⬆️</button>
       </div>
@@ -2217,60 +2162,12 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     dispatchSettingsChange();
   });
 
-  // Eraser toggle and layer picker
+  // Eraser toggle
   const eraserBtn = toolbar.querySelector('#oo-eraser') as HTMLButtonElement;
-  const eraserLayerPicker = toolbar.querySelector('#oo-eraser-layers') as HTMLElement;
-  let eraserHoldTimer: number | null = null;
-
-  eraserBtn?.addEventListener('mousedown', () => {
-    // Start timer for hold-to-show-picker
-    eraserHoldTimer = window.setTimeout(() => {
-      eraserLayerPicker?.classList.add('show');
-      eraserHoldTimer = null;
-    }, 300);
-  });
-
-  eraserBtn?.addEventListener('mouseup', () => {
-    // If released before hold timer, toggle eraser
-    if (eraserHoldTimer !== null) {
-      clearTimeout(eraserHoldTimer);
-      eraserHoldTimer = null;
-      isEraser = !isEraser;
-      eraserBtn.classList.toggle('active', isEraser);
-      dispatchSettingsChange();
-    }
-  });
-
-  eraserBtn?.addEventListener('mouseleave', () => {
-    if (eraserHoldTimer !== null) {
-      clearTimeout(eraserHoldTimer);
-      eraserHoldTimer = null;
-    }
-  });
-
-  // Eraser layer selection
-  eraserLayerPicker?.querySelectorAll('.eraser-layer-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const layer = (btn as HTMLElement).dataset.layer as 'all' | 'normal' | 'background' | 'foreground';
-      eraserLayer = layer;
-      eraserLayerPicker.querySelectorAll('.eraser-layer-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      eraserLayerPicker.classList.remove('show');
-      // Auto-enable eraser when selecting a layer
-      isEraser = true;
-      eraserBtn.classList.add('active');
-      dispatchSettingsChange();
-    });
-  });
-
-  // Close eraser picker when clicking outside
-  document.addEventListener('click', (e) => {
-    if (eraserLayerPicker?.classList.contains('show')) {
-      const target = e.target as Node;
-      if (!eraserLayerPicker.contains(target) && target !== eraserBtn) {
-        eraserLayerPicker.classList.remove('show');
-      }
-    }
+  eraserBtn?.addEventListener('click', () => {
+    isEraser = !isEraser;
+    eraserBtn.classList.toggle('active', isEraser);
+    dispatchSettingsChange();
   });
 
   // Layer toggles (background/foreground - both no collision)
@@ -3276,7 +3173,6 @@ function dispatchSettingsChange(): void {
       brush: getBrush(),
       textStyle: getTextStyle(),
       eraser: isEraser,
-      eraserLayer: eraserLayer,
       layer: drawLayer,
     }
   }));
@@ -3417,10 +3313,6 @@ export function getBrush(): string {
 
 export function getEraser(): boolean {
   return isEraser;
-}
-
-export function getEraserLayer(): 'all' | 'normal' | 'background' | 'foreground' {
-  return eraserLayer;
 }
 
 export function getLayer(): 'normal' | 'background' | 'foreground' {
