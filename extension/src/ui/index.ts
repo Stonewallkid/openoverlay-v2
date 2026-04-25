@@ -4,7 +4,7 @@
  */
 
 import { signInWithGoogle, signOut, onAuthStateChanged, getCurrentUser } from '@/auth';
-import { getUserProfile, followUser, unfollowUser, isFollowing, submitFeedback, getFollowers, subscribeToFollowers, type UserProfile } from '@/db';
+import { getUserProfile, followUser, unfollowUser, isFollowing, submitFeedback, getFollowers, subscribeToFollowers, updateBio, type UserProfile } from '@/db';
 import { getBookmarks, type BookmarkedAnnotation } from '@/annotations';
 import type { User } from 'firebase/auth';
 
@@ -953,14 +953,75 @@ const STYLES = `
 
   .profile-bio {
     padding: 16px 20px;
+    border-bottom: 1px solid #333;
+  }
+
+  .profile-bio-label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .profile-bio-content {
     color: #ccc;
     font-size: 14px;
-    border-bottom: 1px solid #333;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 6px;
+    transition: background 0.2s;
+  }
+
+  .profile-bio-content:hover {
+    background: rgba(255,255,255,0.05);
   }
 
   .profile-bio-empty {
     color: #666;
     font-style: italic;
+  }
+
+  .profile-bio-input {
+    width: 100%;
+    background: #1a1a1a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 8px;
+    color: #fff;
+    font-size: 14px;
+    resize: none;
+    font-family: inherit;
+  }
+
+  .profile-bio-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+  }
+
+  .profile-bio-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .profile-bio-save {
+    background: #22c55e;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .profile-bio-cancel {
+    background: #666;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
   }
 
   .profile-actions {
@@ -1565,7 +1626,17 @@ export function initUI(): void {
         </div>
       </div>
       <div class="profile-bio" id="profile-bio">
-        <span class="profile-bio-empty">No bio yet</span>
+        <div class="profile-bio-label">Bio (click to edit)</div>
+        <div class="profile-bio-content" id="profile-bio-content">
+          <span class="profile-bio-empty">Click to add a bio...</span>
+        </div>
+        <div class="profile-bio-edit" id="profile-bio-edit" style="display:none;">
+          <textarea class="profile-bio-input" id="profile-bio-input" placeholder="Tell others about yourself..." maxlength="150" rows="3"></textarea>
+          <div class="profile-bio-actions">
+            <button class="profile-bio-save" id="profile-bio-save">Save</button>
+            <button class="profile-bio-cancel" id="profile-bio-cancel">Cancel</button>
+          </div>
+        </div>
       </div>
       <div class="profile-settings">
         <div class="profile-settings-header">Drawing Visibility</div>
@@ -2378,6 +2449,50 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     });
   }
 
+  // Bio editing
+  const bioContent = shadowRoot.querySelector('#profile-bio-content') as HTMLElement;
+  const bioEdit = shadowRoot.querySelector('#profile-bio-edit') as HTMLElement;
+  const bioInput = shadowRoot.querySelector('#profile-bio-input') as HTMLTextAreaElement;
+  const bioSaveBtn = shadowRoot.querySelector('#profile-bio-save') as HTMLButtonElement;
+  const bioCancelBtn = shadowRoot.querySelector('#profile-bio-cancel') as HTMLButtonElement;
+
+  bioContent?.addEventListener('click', () => {
+    // Show edit mode
+    const currentBio = bioContent.dataset.bio || '';
+    bioInput.value = currentBio;
+    bioContent.style.display = 'none';
+    bioEdit.style.display = 'block';
+    bioInput.focus();
+  });
+
+  bioInput?.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // Prevent keyboard shortcuts
+  });
+
+  bioSaveBtn?.addEventListener('click', async () => {
+    const newBio = bioInput.value.trim();
+    bioSaveBtn.disabled = true;
+    bioSaveBtn.textContent = 'Saving...';
+
+    try {
+      await updateBio(newBio);
+      bioContent.innerHTML = newBio ? escapeHtml(newBio) : '<span class="profile-bio-empty">Click to add a bio...</span>';
+      bioContent.dataset.bio = newBio;
+      bioEdit.style.display = 'none';
+      bioContent.style.display = 'block';
+    } catch (error) {
+      console.error('[OpenOverlay] Failed to save bio:', error);
+    } finally {
+      bioSaveBtn.disabled = false;
+      bioSaveBtn.textContent = 'Save';
+    }
+  });
+
+  bioCancelBtn?.addEventListener('click', () => {
+    bioEdit.style.display = 'none';
+    bioContent.style.display = 'block';
+  });
+
   // Feedback form submission
   const feedbackSubmitBtn = shadowRoot.querySelector('#feedback-submit');
   feedbackSubmitBtn?.addEventListener('click', async () => {
@@ -2678,10 +2793,14 @@ function updateProfileUI(user: User | null): void {
 
         if (followersCount) followersCount.textContent = String(profile.followersCount || 0);
         if (followingCount) followingCount.textContent = String(profile.followingCount || 0);
-        if (bio) {
-          bio.innerHTML = profile.bio
-            ? profile.bio
-            : '<span class="profile-bio-empty">No bio yet</span>';
+
+        // Update bio content
+        const bioContent = shadowRoot?.querySelector('#profile-bio-content') as HTMLElement;
+        if (bioContent) {
+          bioContent.innerHTML = profile.bio
+            ? escapeHtml(profile.bio)
+            : '<span class="profile-bio-empty">Click to add a bio...</span>';
+          bioContent.dataset.bio = profile.bio || '';
         }
       }
     });
