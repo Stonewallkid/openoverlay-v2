@@ -4,7 +4,7 @@
  */
 
 import { signInWithGoogle, signOut, onAuthStateChanged, getCurrentUser } from '@/auth';
-import { getUserProfile, followUser, unfollowUser, isFollowing, submitFeedback, type UserProfile } from '@/db';
+import { getUserProfile, followUser, unfollowUser, isFollowing, submitFeedback, getFollowers, subscribeToFollowers, type UserProfile } from '@/db';
 import { getBookmarks, type BookmarkedAnnotation } from '@/annotations';
 import type { User } from 'firebase/auth';
 
@@ -26,7 +26,9 @@ let toolbarJustOpened = false; // Prevents click-outside from firing on same cli
 // Auth state
 let currentAuthUser: User | null = null;
 let isProfileModalOpen = false;
-// Visibility state is now managed by visibilityState object below
+let followerUnsubscribe: (() => void) | null = null;
+let newFollowerCount = 0;
+let isFollowersPanelOpen = false;
 
 // Quick color presets - expanded palette
 const QUICK_COLORS = [
@@ -861,6 +863,94 @@ const STYLES = `
     text-transform: uppercase;
   }
 
+  .profile-stat {
+    position: relative;
+  }
+
+  .notification-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background: #ef4444;
+    color: white;
+    font-size: 10px;
+    font-weight: bold;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+  }
+
+  .followers-panel {
+    display: none;
+    padding: 12px 20px;
+    border-bottom: 1px solid #333;
+    background: rgba(34, 197, 94, 0.1);
+  }
+
+  .followers-panel.show {
+    display: block;
+  }
+
+  .followers-panel-header {
+    font-size: 12px;
+    font-weight: bold;
+    color: #22c55e;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+  }
+
+  .follower-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid #333;
+  }
+
+  .follower-item:last-child {
+    border-bottom: none;
+  }
+
+  .follower-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #333;
+  }
+
+  .follower-info {
+    flex: 1;
+  }
+
+  .follower-name {
+    font-size: 14px;
+    color: #fff;
+    font-weight: 500;
+  }
+
+  .follower-time {
+    font-size: 11px;
+    color: #888;
+  }
+
+  .no-followers {
+    color: #666;
+    font-size: 13px;
+    font-style: italic;
+    padding: 8px 0;
+  }
+
   .profile-bio {
     padding: 16px 20px;
     color: #ccc;
@@ -1459,13 +1549,19 @@ export function initUI(): void {
         <input type="text" class="screen-name-input" id="oo-screen-name" placeholder="Pick a nickname!" maxlength="12">
       </div>
       <div class="profile-stats">
-        <div class="profile-stat" id="followers-stat">
+        <div class="profile-stat" id="followers-stat" title="Click to view followers">
           <div class="profile-stat-value" id="followers-count">0</div>
           <div class="profile-stat-label">Followers</div>
         </div>
-        <div class="profile-stat" id="following-stat">
+        <div class="profile-stat" id="following-stat" title="Click to view following">
           <div class="profile-stat-value" id="following-count">0</div>
           <div class="profile-stat-label">Following</div>
+        </div>
+      </div>
+      <div class="followers-panel" id="followers-panel">
+        <div class="followers-panel-header">Your Followers</div>
+        <div id="followers-list">
+          <div class="no-followers">Loading followers...</div>
         </div>
       </div>
       <div class="profile-bio" id="profile-bio">
@@ -2506,15 +2602,23 @@ async function renderContributorsList(
 
       try {
         if (wasFollowing) {
-          await unfollowUser(currentUser.uid, userId);
+          await unfollowUser(userId);
           button.classList.remove('following');
           button.classList.add('follow');
           button.textContent = 'Follow';
+          // Notify canvas to update following cache
+          document.dispatchEvent(new CustomEvent('oo:following:changed', {
+            detail: { userId, action: 'unfollow' }
+          }));
         } else {
-          await followUser(currentUser.uid, userId, userName, userPhoto);
+          await followUser(userId);
           button.classList.remove('follow');
           button.classList.add('following');
           button.textContent = 'Following';
+          // Notify canvas to update following cache
+          document.dispatchEvent(new CustomEvent('oo:following:changed', {
+            detail: { userId, action: 'follow' }
+          }));
         }
       } catch (error) {
         console.error('[OpenOverlay] Follow action failed:', error);
@@ -2581,7 +2685,20 @@ function updateProfileUI(user: User | null): void {
         }
       }
     });
+
+    // Setup follower subscription for real-time notifications
+    setupFollowerSubscription(user.uid);
+
+    // Setup click handler for followers stat
+    setupFollowersStatClick();
   } else {
+    // Clean up follower subscription
+    if (followerUnsubscribe) {
+      followerUnsubscribe();
+      followerUnsubscribe = null;
+    }
+    newFollowerCount = 0;
+    isFollowersPanelOpen = false;
     // User is signed out - show default icon
     profileBtn.textContent = '👤';
     loginPrompt.style.display = 'block';
@@ -2599,6 +2716,119 @@ function toggleProfileModal(): void {
 
   if (isProfileModalOpen) {
     updateBookmarksList();
+    // Clear new follower badge when opening profile
+    if (newFollowerCount > 0) {
+      newFollowerCount = 0;
+      updateFollowerBadge();
+    }
+  }
+}
+
+/**
+ * Setup real-time follower subscription
+ */
+function setupFollowerSubscription(uid: string): void {
+  // Clean up existing subscription
+  if (followerUnsubscribe) {
+    followerUnsubscribe();
+  }
+
+  const unsub = subscribeToFollowers(uid, (follower) => {
+    console.log('[OpenOverlay] New follower:', follower.displayName);
+    newFollowerCount++;
+    updateFollowerBadge();
+
+    // Update follower count in stats
+    const followersCount = shadowRoot?.querySelector('#followers-count') as HTMLElement;
+    if (followersCount) {
+      const current = parseInt(followersCount.textContent || '0');
+      followersCount.textContent = String(current + 1);
+    }
+  });
+
+  if (unsub) {
+    followerUnsubscribe = unsub;
+  }
+}
+
+/**
+ * Update the follower notification badge
+ */
+function updateFollowerBadge(): void {
+  const followersStat = shadowRoot?.querySelector('#followers-stat');
+  if (!followersStat) return;
+
+  // Remove existing badge
+  const existingBadge = followersStat.querySelector('.notification-badge');
+  if (existingBadge) {
+    existingBadge.remove();
+  }
+
+  // Add badge if there are new followers
+  if (newFollowerCount > 0) {
+    const badge = document.createElement('div');
+    badge.className = 'notification-badge';
+    badge.textContent = newFollowerCount > 9 ? '9+' : String(newFollowerCount);
+    followersStat.appendChild(badge);
+  }
+}
+
+/**
+ * Setup click handler for followers stat
+ */
+function setupFollowersStatClick(): void {
+  const followersStat = shadowRoot?.querySelector('#followers-stat');
+  const followersPanel = shadowRoot?.querySelector('#followers-panel');
+
+  if (!followersStat || !followersPanel) return;
+
+  // Remove existing listener to prevent duplicates
+  const newFollowersStat = followersStat.cloneNode(true);
+  followersStat.parentNode?.replaceChild(newFollowersStat, followersStat);
+
+  newFollowersStat.addEventListener('click', async () => {
+    isFollowersPanelOpen = !isFollowersPanelOpen;
+    followersPanel.classList.toggle('show', isFollowersPanelOpen);
+
+    if (isFollowersPanelOpen) {
+      // Clear badge
+      newFollowerCount = 0;
+      updateFollowerBadge();
+
+      // Load followers
+      await loadFollowersList();
+    }
+  });
+}
+
+/**
+ * Load and display followers list
+ */
+async function loadFollowersList(): Promise<void> {
+  const followersList = shadowRoot?.querySelector('#followers-list');
+  if (!followersList || !currentAuthUser) return;
+
+  followersList.innerHTML = '<div class="no-followers">Loading...</div>';
+
+  try {
+    const followers = await getFollowers(currentAuthUser.uid, 20);
+
+    if (followers.length === 0) {
+      followersList.innerHTML = '<div class="no-followers">No followers yet. Share your drawings to get followers!</div>';
+      return;
+    }
+
+    followersList.innerHTML = followers.map(f => `
+      <div class="follower-item">
+        <img class="follower-avatar" src="${f.photoURL || ''}" alt="${escapeHtml(f.displayName)}" onerror="this.style.display='none'">
+        <div class="follower-info">
+          <div class="follower-name">${escapeHtml(f.displayName)}</div>
+        </div>
+      </div>
+    `).join('');
+  } catch (error) {
+    console.error('[OpenOverlay] Failed to load followers:', error);
+    followersList.innerHTML = '<div class="no-followers">Failed to load followers</div>';
   }
 }
 

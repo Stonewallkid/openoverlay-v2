@@ -339,6 +339,25 @@ export function initCanvas(): void {
     redraw();
   }) as EventListener);
 
+  // Update following cache when user follows/unfollows someone
+  document.addEventListener('oo:following:changed', ((e: CustomEvent) => {
+    const { userId, action } = e.detail;
+    if (!followingCache) followingCache = new Set();
+
+    if (action === 'follow') {
+      followingCache.add(userId);
+      console.log('[OpenOverlay] Added to following cache:', userId);
+    } else {
+      followingCache.delete(userId);
+      console.log('[OpenOverlay] Removed from following cache:', userId);
+    }
+
+    // Redraw if following filter is active
+    if (drawingVisibility.showFollowing) {
+      redraw();
+    }
+  }) as EventListener);
+
   // Load saved visibility preferences
   loadVisibilityPrefs();
 

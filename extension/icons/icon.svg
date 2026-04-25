@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Pink circle background -->
+  <circle cx="64" cy="64" r="60" fill="#FF6B9D"/>
+
+  <!-- Black outline -->
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#000" stroke-width="4"/>
+
+  <!-- Running stick figure (white with black outline) -->
+  <!-- Head -->
+  <circle cx="72" cy="38" r="12" fill="#FFF" stroke="#000" stroke-width="3"/>
+
+  <!-- Body -->
+  <line x1="68" y1="50" x2="58" y2="75" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+  <line x1="68" y1="50" x2="58" y2="75" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Arms (running pose) -->
+  <line x1="62" y1="58" x2="42" y2="50" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+  <line x1="62" y1="58" x2="42" y2="50" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
+  <line x1="62" y1="58" x2="78" y2="68" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+  <line x1="62" y1="58" x2="78" y2="68" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Legs (running pose) -->
+  <line x1="58" y1="75" x2="40" y2="95" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+  <line x1="58" y1="75" x2="40" y2="95" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
+  <line x1="58" y1="75" x2="80" y2="90" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+  <line x1="58" y1="75" x2="80" y2="90" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
+</svg>

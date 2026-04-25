@@ -245,6 +245,88 @@ export async function getFollowing(uid: string, maxResults = 50): Promise<UserPr
 }
 
 /**
+ * Subscribe to new followers (real-time)
+ */
+export function subscribeToFollowers(
+  uid: string,
+  onNewFollower: (follower: { uid: string; displayName: string; photoURL: string; followedAt: Date }) => void
+): Unsubscribe | null {
+  if (!db) return null;
+
+  const followersRef = collection(db, 'users', uid, 'followers');
+  // Only listen for followers added after now
+  const q = query(followersRef, orderBy('followedAt', 'desc'), limit(10));
+
+  let isFirstSnapshot = true;
+
+  return onSnapshot(q, async (snapshot) => {
+    // Skip the initial snapshot (existing followers)
+    if (isFirstSnapshot) {
+      isFirstSnapshot = false;
+      return;
+    }
+
+    // Process new followers
+    for (const change of snapshot.docChanges()) {
+      if (change.type === 'added') {
+        const followerUid = change.doc.id;
+        const data = change.doc.data();
+        const followedAt = data.followedAt?.toDate() || new Date();
+
+        // Get follower's profile
+        const profile = await getUserProfile(followerUid);
+        if (profile) {
+          onNewFollower({
+            uid: followerUid,
+            displayName: profile.displayName,
+            photoURL: profile.photoURL,
+            followedAt,
+          });
+        }
+      }
+    }
+  });
+}
+
+/**
+ * Get unread follower notifications (followers since last check)
+ */
+export async function getNewFollowers(uid: string, sinceTimestamp?: Date): Promise<UserProfile[]> {
+  if (!db) return [];
+
+  const followersRef = collection(db, 'users', uid, 'followers');
+  let q;
+
+  if (sinceTimestamp) {
+    q = query(
+      followersRef,
+      orderBy('followedAt', 'desc'),
+      limit(20)
+    );
+  } else {
+    q = query(followersRef, orderBy('followedAt', 'desc'), limit(20));
+  }
+
+  const snapshot = await getDocs(q);
+  const followers: UserProfile[] = [];
+
+  for (const docSnap of snapshot.docs) {
+    const data = docSnap.data();
+    const followedAt = data.followedAt?.toDate();
+
+    // Filter by timestamp if provided
+    if (sinceTimestamp && followedAt && followedAt <= sinceTimestamp) {
+      continue;
+    }
+
+    const profile = await getUserProfile(docSnap.id);
+    if (profile) followers.push(profile);
+  }
+
+  return followers;
+}
+
+/**
  * Post an activity (drawing, course, annotation)
  */
 export async function postActivity(activity: Omit<Activity, 'id' | 'createdAt' | 'userId' | 'userDisplayName' | 'userPhotoURL'>): Promise<void> {
