@@ -3,7 +3,7 @@
  * Smudgy runs onto the page and demonstrates the extension
  */
 
-import { openMenu, getShadowRoot, getQuickExplorePosition } from '@/ui';
+import { openMenu, getShadowRoot, getQuickExplorePosition, setModeExternal } from '@/ui';
 import { addExternalStroke } from '@/canvas';
 
 /**
@@ -64,7 +64,9 @@ const SPEECH_DURATION = 2500;
 
 // Brand colors
 const PINK = '#ff69b4';
+const DARK_PINK = '#d45a9d';
 const WHITE = '#ffffff';
+const BLACK = '#000000';
 
 interface OnboardingState {
   step: number;
@@ -511,6 +513,8 @@ function updateStep(dt: number): void {
         showSpeech("draw here!");
         // Highlight the draw button (index 0)
         highlightButton(0);
+        // Open the draw toolbar
+        setModeExternal('draw');
 
         // Build the full line path upfront (from left side to near FAB)
         selfDrawProgress = 0;
@@ -700,44 +704,61 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
   const topOfHead = headY - headRadius;
   const hairWiggle = Math.sin(state.animFrame * Math.PI * 2) * 2;
 
-  // Draw hair FIRST (behind the head)
-  ctx.strokeStyle = WHITE;
-  ctx.lineWidth = 2.5;
+  // Helper to draw hair stroke with outline (white outside, thin black inside, white core)
+  const drawHairStroke = (drawPath: () => void) => {
+    // White outline (outermost)
+    ctx.strokeStyle = WHITE;
+    ctx.lineWidth = 3.1;
+    drawPath();
+    ctx.stroke();
+    // Thin black inside
+    ctx.strokeStyle = BLACK;
+    ctx.lineWidth = 2.8;
+    drawPath();
+    ctx.stroke();
+    // White core
+    ctx.strokeStyle = WHITE;
+    ctx.lineWidth = 2.5;
+    drawPath();
+    ctx.stroke();
+  };
+
   ctx.lineCap = 'round';
 
   if (isMoving) {
-    // Running: hairs stick up high then curve back slightly (shorter, more upright)
-    // Front hair - mostly UP with slight bend back
-    ctx.beginPath();
-    ctx.moveTo(centerX + 2, topOfHead + 1);
-    ctx.bezierCurveTo(
-      centerX + 1, topOfHead - 8,     // Go UP high
-      centerX - 3, topOfHead - 9,     // Slight curve back at top
-      centerX - 6 + hairWiggle * 0.5, topOfHead - 7  // End point - shorter, higher
-    );
-    ctx.stroke();
+    // Running: hairs stick up high then curve back slightly
+    drawHairStroke(() => {
+      ctx.beginPath();
+      ctx.moveTo(centerX + 2, topOfHead + 1);
+      ctx.bezierCurveTo(
+        centerX + 1, topOfHead - 8,
+        centerX - 3, topOfHead - 9,
+        centerX - 6 + hairWiggle * 0.5, topOfHead - 7
+      );
+    });
 
-    // Back hair - shorter and more upright
-    ctx.beginPath();
-    ctx.moveTo(centerX - 2, topOfHead + 1);
-    ctx.bezierCurveTo(
-      centerX - 2, topOfHead - 5,     // Go UP high
-      centerX - 4, topOfHead - 6,     // Slight curve back
-      centerX - 7 + hairWiggle * 0.4, topOfHead - 4  // End point - shorter, higher
-    );
-    ctx.stroke();
+    drawHairStroke(() => {
+      ctx.beginPath();
+      ctx.moveTo(centerX - 2, topOfHead + 1);
+      ctx.bezierCurveTo(
+        centerX - 2, topOfHead - 5,
+        centerX - 4, topOfHead - 6,
+        centerX - 7 + hairWiggle * 0.4, topOfHead - 4
+      );
+    });
   } else {
-    // Standing: mohawk spikes going straight up from top of head
-    ctx.beginPath();
-    ctx.moveTo(centerX + 1, topOfHead + 1);
-    ctx.quadraticCurveTo(centerX + 1, topOfHead - 5, centerX, topOfHead - 9);
-    ctx.stroke();
+    // Standing: mohawk spikes going straight up
+    drawHairStroke(() => {
+      ctx.beginPath();
+      ctx.moveTo(centerX + 1, topOfHead + 1);
+      ctx.quadraticCurveTo(centerX + 1, topOfHead - 5, centerX, topOfHead - 9);
+    });
 
-    // Back spike (shorter)
-    ctx.beginPath();
-    ctx.moveTo(centerX - 2, topOfHead + 2);
-    ctx.quadraticCurveTo(centerX - 2, topOfHead - 2, centerX - 2, topOfHead - 5);
-    ctx.stroke();
+    drawHairStroke(() => {
+      ctx.beginPath();
+      ctx.moveTo(centerX - 2, topOfHead + 2);
+      ctx.quadraticCurveTo(centerX - 2, topOfHead - 2, centerX - 2, topOfHead - 5);
+    });
   }
 
   // Now draw head circle (on top of hair)
@@ -750,12 +771,21 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
   // Turn off shadow for the pink fill (no pink glow)
   ctx.shadowColor = 'transparent';
   ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
 
   // Pink circle - almost fills head
   ctx.fillStyle = PINK;
   ctx.beginPath();
   ctx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
   ctx.fill();
+
+  // Darker pink outline around the face
+  ctx.strokeStyle = DARK_PINK;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
+  ctx.stroke();
 
   // Eye cutout position - use signed lookDir so eye is on correct side when stopped
   // Negative lookDir = eye on left, positive = eye on right
@@ -788,16 +818,38 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
 
   // Redraw head outline ON TOP so it covers any cutout bleeding past the edge
   ctx.strokeStyle = WHITE;
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Stick body
-  ctx.beginPath();
-  ctx.moveTo(centerX, bodyStartY);
-  ctx.lineTo(centerX, bodyEndY);
-  ctx.stroke();
+  // Helper to draw a line with outline (white outside, black inside, white core)
+  const drawLineWithOutline = (x1: number, y1: number, x2: number, y2: number) => {
+    // White outline (outermost)
+    ctx.strokeStyle = WHITE;
+    ctx.lineWidth = 3.6;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    // Thin black inside
+    ctx.strokeStyle = BLACK;
+    ctx.lineWidth = 3.3;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    // White core
+    ctx.strokeStyle = WHITE;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  };
+
+  // Stick body with outline
+  drawLineWithOutline(centerX, bodyStartY, centerX, bodyEndY);
 
   // Animation
   const walkCycle = Math.sin(animFrame * Math.PI);
@@ -806,7 +858,7 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
   // Wave animation
   const waveAngle = waving ? Math.sin(animFrame * 3) * 0.5 : 0;
 
-  // Helper to draw an L-shaped limb (90-degree angle at joint)
+  // Helper to draw an L-shaped limb with outline (90-degree angle at joint)
   const drawLLimb = (
     startX: number, startY: number,
     angle: number,
@@ -819,6 +871,25 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
     const endX = elbowX + Math.sin(lowerAngle) * lowerLen * (isLeft ? -1 : 1);
     const endY = elbowY + Math.cos(lowerAngle) * lowerLen;
 
+    // White outline (outermost)
+    ctx.strokeStyle = WHITE;
+    ctx.lineWidth = 3.6;
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(elbowX, elbowY);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    // Thin black inside
+    ctx.strokeStyle = BLACK;
+    ctx.lineWidth = 3.3;
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(elbowX, elbowY);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    // White core
+    ctx.strokeStyle = WHITE;
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(startX, startY);
     ctx.lineTo(elbowX, elbowY);
@@ -848,39 +919,21 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
     drawLLimb(centerX, shoulderY, 0.1, upperArm, forearm, false);
   }
 
-  // Legs - simple wiggly sticks
+  // Legs - simple wiggly sticks with outline
   const legSwing = isWalking ? Math.sin(animFrame * Math.PI) * 8 : 0;
 
   if (!state.onGround && state.smudgyVy < 0) {
     // Jumping up - legs tucked
-    ctx.beginPath();
-    ctx.moveTo(centerX, hipY);
-    ctx.lineTo(centerX - 3, hipY + limbLength * 0.7);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(centerX, hipY);
-    ctx.lineTo(centerX + 3, hipY + limbLength * 0.7);
-    ctx.stroke();
+    drawLineWithOutline(centerX, hipY, centerX - 3, hipY + limbLength * 0.7);
+    drawLineWithOutline(centerX, hipY, centerX + 3, hipY + limbLength * 0.7);
   } else if (!state.onGround) {
     // Falling - legs spread
-    ctx.beginPath();
-    ctx.moveTo(centerX, hipY);
-    ctx.lineTo(centerX - 7, hipY + limbLength);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(centerX, hipY);
-    ctx.lineTo(centerX + 7, hipY + limbLength);
-    ctx.stroke();
+    drawLineWithOutline(centerX, hipY, centerX - 7, hipY + limbLength);
+    drawLineWithOutline(centerX, hipY, centerX + 7, hipY + limbLength);
   } else {
     // Walking or standing - wiggly legs
-    ctx.beginPath();
-    ctx.moveTo(centerX, hipY);
-    ctx.lineTo(centerX - 4 + legSwing, hipY + limbLength);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(centerX, hipY);
-    ctx.lineTo(centerX + 4 - legSwing, hipY + limbLength);
-    ctx.stroke();
+    drawLineWithOutline(centerX, hipY, centerX - 4 + legSwing, hipY + limbLength);
+    drawLineWithOutline(centerX, hipY, centerX + 4 - legSwing, hipY + limbLength);
   }
 
   ctx.restore();

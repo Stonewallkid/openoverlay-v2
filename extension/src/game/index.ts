@@ -1045,12 +1045,18 @@ function showGamePopup(type: 'gameover' | 'finish'): void {
   // Focus name input if present
   nameInput?.focus();
 
-  // Enter key submits
+  // Enter key submits name only (doesn't restart race)
   nameInput?.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // Prevent event from bubbling
     if (e.key === 'Enter' && nameInput.value.trim()) {
+      e.preventDefault(); // Prevent form submission / button activation
       saveScore(nameInput.value.trim(), finishTime);
-      removeGamePopup();
-      restartRace();
+      // Just show confirmation, don't restart - user clicks Retry or Close
+      nameInput.value = '✓ Saved!';
+      nameInput.disabled = true;
+      nameInput.style.background = '#22c55e';
+      // Focus retry button so user can press Enter to retry if they want
+      retryBtn?.focus();
     }
   });
 }
