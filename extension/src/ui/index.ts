@@ -2184,19 +2184,17 @@ export function initUI(): void {
 
     <!-- GAME MODE CONTROLS -->
     <div class="game-controls" id="game-controls">
-      <!-- Row 1: Mode + Character + Multiplayer -->
+      <!-- Row 1: Play Mode Buttons -->
       <div class="game-row">
         <div class="game-mode-toggle">
-          <button class="game-mode-btn active" data-mode="play" data-playmode="explore" title="Explore">🚶</button>
-          <button class="game-mode-btn" data-mode="play" data-playmode="race" title="Race">🏃</button>
-          <button class="game-mode-btn" data-mode="build" title="Build">🔨</button>
+          <button class="game-mode-btn" id="oo-multiplayer-setup" data-mode="play" data-playmode="explore" title="Multiplayer Explore">👥 MP</button>
+          <button class="game-mode-btn" id="oo-tag-game" data-mode="play" data-playmode="explore" title="Tag Game">🏷️ Tag</button>
+          <button class="game-mode-btn" data-mode="play" data-playmode="race" title="Race">🏃 Race</button>
         </div>
-        <button class="multiplayer-btn" id="oo-multiplayer-setup" title="Setup for multiplayer (resize window)">👥 MP</button>
-        <button class="multiplayer-btn" id="oo-tag-game" title="Start or join tag game">🏷️ Tag</button>
       </div>
 
-      <!-- Row 2: Build Tools (hidden by default, shown when build mode selected) -->
-      <div class="game-row build-tools-section" style="display: none;">
+      <!-- Row 2: Build Tools (shown by default in build mode) -->
+      <div class="game-row build-tools-section">
         <div class="game-tools" id="game-tools">
           <button class="game-tool-btn" data-tool="select" title="Select">✋</button>
           <button class="game-tool-btn active" data-tool="spawn" title="Spawn">👤</button>
@@ -2210,10 +2208,8 @@ export function initUI(): void {
         </div>
       </div>
 
-      <!-- Row 3: Colors + Actions -->
+      <!-- Row 3: Actions -->
       <div class="game-row">
-        <input type="color" id="oo-game-color" value="#ff3366" title="Color">
-        <div class="quick-colors game-colors" id="oo-game-quick-colors"></div>
         <div class="game-actions">
           <button class="action-btn btn-undo" id="oo-game-undo" title="Undo">↩</button>
           <button class="action-btn btn-clear" id="oo-game-clear" title="Clear">🗑</button>
@@ -2541,8 +2537,12 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     document.dispatchEvent(new CustomEvent('oo:save'));
   });
 
-  // Game mode toggle (Explore/Race/Build)
+  // Game mode toggle (Race button only - MP and Tag have their own handlers)
   toolbar.querySelectorAll('.game-mode-btn').forEach(btn => {
+    // Skip buttons with specific IDs (they have their own handlers)
+    const btnId = (btn as HTMLElement).id;
+    if (btnId === 'oo-multiplayer-setup' || btnId === 'oo-tag-game') return;
+
     btn.addEventListener('click', () => {
       const mode = (btn as HTMLElement).dataset.mode as 'play' | 'build';
       const playmode = (btn as HTMLElement).dataset.playmode as 'explore' | 'race' | undefined;
@@ -2551,10 +2551,10 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       toolbar.querySelectorAll('.game-mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
-      // Show/hide build tools
+      // Hide build tools when playing
       const buildTools = toolbar.querySelector('.build-tools-section') as HTMLElement;
       if (buildTools) {
-        buildTools.style.display = mode === 'build' ? 'flex' : 'none';
+        buildTools.style.display = 'none';
       }
 
       // Dispatch game mode change
@@ -2580,31 +2580,6 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     });
   });
 
-  // Game mode color picker
-  const gameColorInput = toolbar.querySelector('#oo-game-color') as HTMLInputElement;
-  gameColorInput?.addEventListener('input', () => {
-    document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color: gameColorInput.value } }));
-  });
-
-  // Populate game colors
-  const gameColorsContainer = toolbar.querySelector('#oo-game-quick-colors');
-  if (gameColorsContainer) {
-    const gameColors = ['#ff3366', '#22c55e', '#3b82f6', '#f59e0b', '#8b5cf6', '#fff', '#000'];
-    gameColorsContainer.innerHTML = gameColors.map((c, i) => `
-      <div class="quick-color ${i === 0 ? 'active' : ''}" data-color="${c}" style="background: ${c}" title="${c}"></div>
-    `).join('');
-
-    gameColorsContainer.querySelectorAll('.quick-color').forEach(swatch => {
-      swatch.addEventListener('click', () => {
-        const color = (swatch as HTMLElement).dataset.color || '#ff3366';
-        if (gameColorInput) gameColorInput.value = color;
-        gameColorsContainer.querySelectorAll('.quick-color').forEach(s => s.classList.remove('active'));
-        swatch.classList.add('active');
-        document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color } }));
-      });
-    });
-  }
-
   // Game mode action buttons
   toolbar.querySelector('#oo-game-undo')?.addEventListener('click', () => {
     document.dispatchEvent(new CustomEvent('oo:undo'));
@@ -2615,10 +2590,12 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   });
 
   toolbar.querySelector('#oo-game-cancel')?.addEventListener('click', () => {
-    // Just close the toolbar without clearing anything
-    // Save first to preserve any changes, then close
+    // Just close the toolbar without removing character
+    // Save first to preserve any changes
     document.dispatchEvent(new CustomEvent('oo:save'));
-    setMode('none');
+    // Hide toolbar but keep game/character active
+    toolbar.classList.remove('show');
+    currentMode = 'none'; // Reset so clicking game button reopens toolbar
   });
 
   toolbar.querySelector('#oo-game-save')?.addEventListener('click', () => {
@@ -2682,7 +2659,7 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     shadowRoot?.querySelector('#oo-profile-modal')?.classList.remove('show');
   });
 
-  // Multiplayer setup button - resize window for consistent coordinates
+  // Multiplayer setup button - resize window and start explore mode
   const mpButton = toolbar.querySelector('#oo-multiplayer-setup');
   mpButton?.addEventListener('click', async () => {
     const btn = mpButton as HTMLButtonElement;
@@ -2693,11 +2670,21 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       const response = await chrome.runtime.sendMessage({ type: 'SETUP_MULTIPLAYER' });
       if (response?.success) {
         btn.textContent = '✓ Ready';
+        // Set active state and clear others
+        toolbar.querySelectorAll('.game-mode-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        // Hide build tools
+        const buildTools = toolbar.querySelector('.build-tools-section') as HTMLElement;
+        if (buildTools) buildTools.style.display = 'none';
+        // Start explore mode
+        gameSubMode = 'play';
+        document.dispatchEvent(new CustomEvent('oo:gamemode', {
+          detail: { mode: 'play', playmode: 'explore' }
+        }));
         setTimeout(() => {
           btn.textContent = '👥 MP';
           btn.disabled = false;
-        }, 2000);
+        }, 1500);
       } else {
         btn.textContent = '❌ Error';
         setTimeout(() => {
@@ -2733,6 +2720,13 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       const response = await chrome.runtime.sendMessage({ type: 'SETUP_MULTIPLAYER' });
       if (response?.success) {
         console.log('[OpenOverlay UI] Multiplayer setup complete, starting tag game');
+        // Set active state and clear others
+        toolbar.querySelectorAll('.game-mode-btn').forEach(b => b.classList.remove('active'));
+        tagButton.classList.add('active');
+        // Hide build tools
+        const buildTools = toolbar.querySelector('.build-tools-section') as HTMLElement;
+        if (buildTools) buildTools.style.display = 'none';
+        gameSubMode = 'play';
         // Now start the tag game
         document.dispatchEvent(new CustomEvent('oo:toggletag'));
       } else {
@@ -3652,28 +3646,24 @@ function setMode(mode: 'none' | 'draw' | 'text' | 'game'): void {
     // Prevent click-outside handler from closing toolbar immediately
     toolbarJustOpened = true;
 
-    // Always start in explore (play) mode when opening game toolbar
-    gameSubMode = 'play';
+    // Always start in build mode when opening game toolbar
+    gameSubMode = 'build';
 
-    // Reset the game mode toggle buttons to show Explore as active
+    // Reset the game mode toggle buttons (none active in build mode)
     const gameModeButtons = shadowRoot?.querySelectorAll('.game-mode-btn');
-    gameModeButtons?.forEach(btn => {
-      const btnMode = (btn as HTMLElement).dataset.mode;
-      const playmode = (btn as HTMLElement).dataset.playmode;
-      btn.classList.toggle('active', btnMode === 'play' && playmode === 'explore');
-    });
+    gameModeButtons?.forEach(btn => btn.classList.remove('active'));
 
-    // Hide build tools (explore mode doesn't need them)
+    // Show build tools (build mode is default)
     const buildTools = shadowRoot?.querySelector('.build-tools-section') as HTMLElement;
-    if (buildTools) buildTools.style.display = 'none';
+    if (buildTools) buildTools.style.display = 'flex';
 
-    // Dispatch explore mode
+    // Dispatch build mode (doesn't drop character)
     document.dispatchEvent(new CustomEvent('oo:gamemode', {
-      detail: { mode: 'play', playmode: 'explore' }
+      detail: { mode: 'build' }
     }));
   } else if (prevMode === 'game') {
-    // Exiting game mode
-    document.dispatchEvent(new CustomEvent('oo:gamemode', { detail: { mode: 'none' } }));
+    // Exiting game mode - keep character visible, just stop game loop
+    // Don't dispatch 'none' mode - character stays
   }
 
   console.log('[OpenOverlay] Mode:', mode);
