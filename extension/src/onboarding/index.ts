@@ -3,7 +3,7 @@
  * Smudgy runs onto the page and demonstrates the extension
  */
 
-import { openMenu, getShadowRoot, getQuickExplorePosition, setModeExternal } from '@/ui';
+import { openMenu, getShadowRoot, getQuickExplorePosition, getProfileButtonPosition, highlightProfileButton, setModeExternal } from '@/ui';
 import { addExternalStroke } from '@/canvas';
 
 /**
@@ -16,8 +16,12 @@ function highlightFab(highlight: boolean): void {
   if (fab) {
     if (highlight) {
       fab.style.background = '#22c55e'; // Green
+      fab.style.boxShadow = '0 0 20px #22c55e, 0 0 40px #22c55e'; // Glow effect
+      fab.style.transform = 'scale(1.1)'; // Slightly bigger
     } else {
-      fab.style.background = ''; // Reset to default
+      fab.style.background = '';
+      fab.style.boxShadow = '';
+      fab.style.transform = '';
     }
   }
 }
@@ -46,6 +50,7 @@ function clearButtonHighlights(): void {
   const minis = shadowRoot.querySelectorAll('.mini');
   minis.forEach(m => m.classList.remove('active'));
   highlightFab(false);
+  highlightProfileButton(false);
 }
 
 // Storage keys
@@ -293,8 +298,9 @@ function updateSmudgy(dt: number): void {
   state.smudgyX += state.smudgyVx * dt;
   state.smudgyY += state.smudgyVy * dt;
 
-  // Ground collision
-  if (state.smudgyY >= groundY) {
+  // Ground collision - only apply during initial steps (before jumping to FAB)
+  // Steps 3+ involve jumping to buttons that are below groundY
+  if (state.step <= 2 && state.smudgyY >= groundY) {
     state.smudgyY = groundY;
     state.smudgyVy = 0;
     state.onGround = true;
@@ -411,15 +417,16 @@ let fullLine: { x: number; y: number }[] = []; // The complete line path
  * Sequence:
  * 0: Fall from top, land in bottom center
  * 1: Wave hello, say "hi! i'm smudgy!"
- * 2: Run to FAB and jump toward it
- * 3: Land on FAB
- * 4: Jump to draw button
- * 5: Land on draw button, say "draw here!", start line drawing
- * 6: Line draws across screen, then jump to quick explore
- * 7: Land on quick explore button, say "play here!", activate game mode
- * 8: Wait for speech to finish
- * 9: Say "wasd to move!"
- * 10: Wait, then complete onboarding
+ * 2: Run toward FAB, stop near it
+ * 3: Wait for menu to open, then jump toward FAB
+ * 4: In air, land on FAB (turns green!)
+ * 5: Stay on FAB (green), then jump to draw button
+ * 6: In air, land on draw button, say "draw here!"
+ * 7: Line draws across screen, then jump to profile button
+ * 8: In air, land on profile button (turns green!), say sign in message
+ * 9: Stay on profile, then jump to quick explore
+ * 10: In air, land on quick explore button, say "explore with me!", spawn player
+ * 11: Wait for player to land, then cleanup onboarding
  */
 function updateStep(dt: number): void {
   state.stepTimer += dt * 16.67;
@@ -447,53 +454,75 @@ function updateStep(dt: number): void {
       }
       break;
 
-    case 2: // Run to FAB and jump toward it
-      if (state.smudgyX >= fabPos.x - 50) {
+    case 2: // Run toward FAB area and stop near it
+      if (state.smudgyX >= fabPos.x - 80) {
+        // Stop running, prepare to jump to FAB
         state.smudgyVx = 0;
-        state.smudgyVy = JUMP_FORCE;
-        state.onGround = false;
         state.step = 3;
         state.stepTimer = 0;
-        // Open menu while jumping
-        setTimeout(() => openMenu(), 300);
+        // Open menu before the jump
+        openMenu();
       }
       break;
 
-    case 3: // In air, moving toward FAB - land on it
-      // Keep moving toward FAB
-      if (state.smudgyX < fabPos.x) {
-        state.smudgyVx = 2;
+    case 3: // Wait for menu to open, then jump onto FAB
+      if (state.stepTimer > 500) {
+        // Jump toward FAB
+        state.smudgyVy = JUMP_FORCE * 0.6; // Smaller jump
+        state.smudgyVx = 3; // Move right toward FAB
+        state.onGround = false;
+        state.step = 4;
+        state.stepTimer = 0;
       }
-      // When falling and near FAB position, land on it
-      if (state.smudgyVy > 0 && state.stepTimer > 200) {
-        // Land on FAB - position so feet are on top of the FAB button
-        // FAB center is at fabPos.y, button radius is ~28px, so top is at fabPos.y - 28
-        // Smudgy height is ~38, so smudgyY should be fabPos.y - 28 - 38 = fabPos.y - 66
+      break;
+
+    case 4: // In air, landing on FAB
+      // Guide toward FAB horizontally
+      if (state.smudgyX < fabPos.x - 5) {
+        state.smudgyVx = 3;
+      } else if (state.smudgyX > fabPos.x + 5) {
+        state.smudgyVx = -2;
+      } else {
+        state.smudgyVx = 0;
+      }
+
+      // Debug: log positions every 30 frames
+      if (Math.floor(state.stepTimer / 500) !== Math.floor((state.stepTimer - dt * 16.67) / 500)) {
+        console.log(`[Smudgy] Step 4: smudgyY=${state.smudgyY.toFixed(0)}, fabPos.y=${fabPos.y.toFixed(0)}, vy=${state.smudgyVy.toFixed(1)}`);
+      }
+
+      // Land on FAB when falling and near FAB position
+      // FAB center is fabPos.y, so top of FAB is around fabPos.y - 28 (button radius)
+      // Smudgy height is ~38, so land when smudgyY reaches fabPos.y - 28 - 5 (some tolerance)
+      if (state.smudgyVy > 0 && state.smudgyY >= fabPos.y - 70) {
+        // Land on top of FAB
         state.smudgyX = fabPos.x;
-        state.smudgyY = fabPos.y - 55; // Stand on top of FAB
+        state.smudgyY = fabPos.y - 65; // Stand on top of FAB
         state.smudgyVx = 0;
         state.smudgyVy = 0;
         state.onGround = true;
-        state.step = 4;
+        state.step = 5;
         state.stepTimer = 0;
-        // Highlight the FAB green
+        // Highlight the FAB green - VISIBLE!
         highlightFab(true);
+        console.log('[Smudgy] Landed on FAB at Y=' + state.smudgyY.toFixed(0) + ', turning green!');
       }
       break;
 
-    case 4: // On FAB, wait a second (showing green) then jump to draw button
-      if (state.stepTimer > 1000) {
+    case 5: // On FAB (green!), wait then jump to draw button
+      // Stay on FAB for 1.5 seconds so user can see it's green
+      if (state.stepTimer > 1500) {
         // Clear FAB highlight before jumping
         highlightFab(false);
         // Jump up toward draw button
-        state.smudgyVy = JUMP_FORCE * 0.8;
+        state.smudgyVy = JUMP_FORCE * 0.7;
         state.onGround = false;
-        state.step = 5;
+        state.step = 6;
         state.stepTimer = 0;
       }
       break;
 
-    case 5: // Jumping to draw button
+    case 6: // Jumping to draw button
       // Move toward draw button while in air
       const dxDraw = drawBtnPos.x - state.smudgyX;
       if (Math.abs(dxDraw) > 5) {
@@ -508,7 +537,7 @@ function updateStep(dt: number): void {
         state.smudgyVx = 0;
         state.smudgyVy = 0;
         state.onGround = true;
-        state.step = 6;
+        state.step = 7;
         state.stepTimer = 0;
         showSpeech("draw here!");
         // Highlight the draw button (index 0)
@@ -532,7 +561,7 @@ function updateStep(dt: number): void {
       }
       break;
 
-    case 6: // On draw button, line draws itself, then jump to quick explore
+    case 7: // On draw button, line draws itself, then jump to profile button
       // Animate the self-drawing line (slower so it's visible)
       selfDrawProgress += dt * 0.025; // ~2.5 seconds to draw fully
 
@@ -545,15 +574,58 @@ function updateStep(dt: number): void {
         if (fullLine.length > 1) {
           addExternalStroke(fullLine, PINK, 4);
         }
-        // Jump toward quick explore button
-        state.smudgyVy = JUMP_FORCE * 0.6;
+        // Close the draw toolbar
+        setModeExternal('none');
+        clearButtonHighlights();
+        // Jump toward profile button
+        state.smudgyVy = JUMP_FORCE * 0.5;
         state.onGround = false;
-        state.step = 7;
+        state.step = 8;
         state.stepTimer = 0;
       }
       break;
 
-    case 7: // Jumping to quick explore button
+    case 8: // Jumping to profile button
+      const profilePos = getProfileButtonPosition();
+      const profileTargetX = profilePos ? profilePos.x : fabPos.x;
+      const profileTargetY = profilePos ? profilePos.y : fabPos.y;
+
+      // Move toward profile button while in air
+      const dxProfile = profileTargetX - state.smudgyX;
+      if (Math.abs(dxProfile) > 5) {
+        state.smudgyVx = dxProfile * 0.08;
+      }
+
+      // When falling and near profile button position, land on it
+      if (state.smudgyVy > 0 && state.smudgyY >= profileTargetY - 60) {
+        // Land on profile button
+        state.smudgyX = profileTargetX;
+        state.smudgyY = profileTargetY - 40;
+        state.smudgyVx = 0;
+        state.smudgyVy = 0;
+        state.onGround = true;
+        state.step = 9;
+        state.stepTimer = 0;
+        // Highlight profile button green
+        highlightProfileButton(true);
+        showSpeech("sign in for TONS more!");
+        console.log('[Smudgy] Landed on profile button!');
+      }
+      break;
+
+    case 9: // On profile button (green!), wait then jump to explore
+      if (state.stepTimer > 2000) {
+        // Clear profile highlight
+        highlightProfileButton(false);
+        // Jump toward quick explore button
+        state.smudgyVy = JUMP_FORCE * 0.5;
+        state.onGround = false;
+        state.step = 10;
+        state.stepTimer = 0;
+      }
+      break;
+
+    case 10: // Jumping to quick explore button
       const quickExplorePos = getQuickExplorePosition();
       const targetX = quickExplorePos ? quickExplorePos.x : fabPos.x;
       const targetY = quickExplorePos ? quickExplorePos.y : fabPos.y - 20;
@@ -564,38 +636,36 @@ function updateStep(dt: number): void {
         state.smudgyVx = dxQuick * 0.08;
       }
 
-      // When falling and past peak, land on quick explore button
-      if (state.smudgyVy > 0 && state.stepTimer > 200) {
+      // When falling and near explore button position, land on it
+      if (state.smudgyVy > 0 && state.smudgyY >= targetY - 60) {
         // Land on quick explore button
         state.smudgyX = targetX;
-        state.smudgyY = targetY - 20;
+        state.smudgyY = targetY - 40;
         state.smudgyVx = 0;
         state.smudgyVy = 0;
         state.onGround = true;
-        state.step = 8;
+        state.step = 11;
         state.stepTimer = 0;
         showSpeech("explore with me!");
+        console.log('[Smudgy] Landed on explore button!');
 
         // Start game mode - player will fall from sky above the drawn line
-        // Calculate spawn position above the middle of the line
         const lineMiddleX = fullLine.length > 0 ? fullLine[Math.floor(fullLine.length / 2)].x : window.innerWidth / 2;
         document.dispatchEvent(new CustomEvent('oo:gamemode', {
           detail: {
             mode: 'play',
             playmode: 'explore',
-            // Spawn above the line so player falls onto it
             spawnPos: { x: lineMiddleX, y: -50 },
-            fromOnboarding: true // Flag to show controls hint
+            fromOnboarding: true
           }
         }));
       }
       break;
 
-    case 8: // On quick explore button, wait for game Smudgy to fall and land
+    case 11: // On quick explore button, wait for game Smudgy to fall and land
       // Wait for speech + time for game Smudgy to fall (~1.5 sec)
       if (state.stepTimer > SPEECH_DURATION + 1000) {
         // Game Smudgy should have landed by now - cleanup onboarding Smudgy
-        // Mark complete and hide onboarding (game Smudgy takes over)
         localStorage.setItem(STORAGE_KEY, 'true');
         cleanup();
       }
@@ -641,27 +711,11 @@ function render(): void {
 }
 
 /**
- * Draw motion lines trailing behind Smudgy
+ * Draw motion lines trailing behind Smudgy (disabled - was distracting)
  */
 function drawMotionLines(): void {
-  if (!ctx || motionHistory.length < 2) return;
-
-  ctx.save();
-  ctx.strokeStyle = PINK;
-  ctx.lineCap = 'round';
-
-  for (let i = 0; i < motionHistory.length - 1; i++) {
-    const alpha = 1 - (i / motionHistory.length);
-    ctx.globalAlpha = alpha * 0.5;
-    ctx.lineWidth = 3 - (i * 0.3);
-
-    ctx.beginPath();
-    ctx.moveTo(motionHistory[i].x - 15, motionHistory[i].y - 5 + (i * 2));
-    ctx.lineTo(motionHistory[i].x - 30 - (i * 5), motionHistory[i].y - 5 + (i * 2));
-    ctx.stroke();
-  }
-
-  ctx.restore();
+  // Motion lines disabled per user feedback
+  return;
 }
 
 /**

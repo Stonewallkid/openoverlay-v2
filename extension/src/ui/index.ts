@@ -1980,7 +1980,7 @@ export function initUI(): void {
   profileModal.innerHTML = `
     <button class="profile-close" id="profile-close-btn">&times;</button>
     <div class="login-prompt" id="login-prompt">
-      <p>Sign in to save your drawings and follow other users</p>
+      <p>Sign in to save your drawings and follow other users +many more features</p>
       <button class="login-btn" id="google-login-btn">
         <svg width="20" height="20" viewBox="0 0 24 24">
           <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -3807,4 +3807,37 @@ export function getQuickExplorePosition(): { x: number; y: number } | null {
     x: rect.left + rect.width / 2,
     y: rect.top + rect.height / 2,
   };
+}
+
+/**
+ * Get profile button position (for onboarding)
+ */
+export function getProfileButtonPosition(): { x: number; y: number } | null {
+  if (!shadowRoot) return null;
+  const profileBtn = shadowRoot.querySelector('#oo-profile-btn') as HTMLElement;
+  if (!profileBtn) return null;
+  const rect = profileBtn.getBoundingClientRect();
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+  };
+}
+
+/**
+ * Highlight profile button (for onboarding)
+ */
+export function highlightProfileButton(highlight: boolean): void {
+  if (!shadowRoot) return;
+  const profileBtn = shadowRoot.querySelector('#oo-profile-btn') as HTMLElement;
+  if (profileBtn) {
+    if (highlight) {
+      profileBtn.style.background = '#22c55e';
+      profileBtn.style.boxShadow = '0 0 20px #22c55e, 0 0 40px #22c55e';
+      profileBtn.style.transform = 'scale(1.1)';
+    } else {
+      profileBtn.style.background = '';
+      profileBtn.style.boxShadow = '';
+      profileBtn.style.transform = '';
+    }
+  }
 }
