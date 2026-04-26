@@ -68,13 +68,26 @@ let player: Player = {
 let wasOnGround = false;
 let landingSlideFrames = 0;
 
-// Idle wave animation
+// Idle animation system
 let lastMoveTime = 0;
 let isWaving = false;
 let waveFrame = 0;
 let waveStartTime = 0;
 const IDLE_WAVE_DELAY = 120000; // Start waving after 2 minutes of no movement
 const WAVE_DURATION = 2000; // Wave for 2 seconds
+
+// Idle fidget animations (shorter delays, random behaviors)
+type IdleAnimType = 'none' | 'headScratch' | 'buttScratch' | 'weightShift' | 'lookAround';
+let currentIdleAnim: IdleAnimType = 'none';
+let idleAnimFrame = 0;
+let idleAnimStartTime = 0;
+let nextIdleAnimTime = 0; // When to trigger next idle animation
+const IDLE_ANIM_MIN_DELAY = 3000; // At least 3 seconds between fidgets
+const IDLE_ANIM_MAX_DELAY = 8000; // At most 8 seconds between fidgets
+const IDLE_ANIM_DURATION = 1500; // Each fidget lasts 1.5 seconds
+
+// Standing pose variation (based on a random seed per session)
+const standingPoseSeed = Math.random();
 
 // Ambient behavior system - Smudgy stays alive!
 let ambientMode = false; // When true, Smudgy does idle behaviors even when game is 'none'
@@ -1381,28 +1394,52 @@ function update(dt: number): void {
     stoppingTimer++;
   }
 
-  // Check for idle wave animation
+  // Check for idle animations (wave + fidgets)
   if (player.onGround && Math.abs(player.vx) < 0.1) {
-    const idleTime = performance.now() - lastMoveTime;
+    const now = performance.now();
+    const idleTime = now - lastMoveTime;
+
+    // Long idle triggers wave
     if (idleTime > IDLE_WAVE_DELAY && !isWaving) {
-      // Start waving
       isWaving = true;
-      waveStartTime = performance.now();
+      waveStartTime = now;
       waveFrame = 0;
     }
     if (isWaving) {
-      // Wave for limited duration
-      if (performance.now() - waveStartTime < WAVE_DURATION) {
+      if (now - waveStartTime < WAVE_DURATION) {
         waveFrame += 0.15;
       } else {
-        // Done waving, reset timer so it doesn't wave again immediately
         isWaving = false;
-        lastMoveTime = performance.now();
+        lastMoveTime = now;
+      }
+    }
+
+    // Short idle fidget animations (head scratch, butt scratch, etc.)
+    if (!isWaving && currentIdleAnim === 'none' && now > nextIdleAnimTime && idleTime > 1000) {
+      // Pick a random idle animation
+      const anims: IdleAnimType[] = ['headScratch', 'buttScratch', 'weightShift', 'lookAround'];
+      currentIdleAnim = anims[Math.floor(Math.random() * anims.length)];
+      idleAnimStartTime = now;
+      idleAnimFrame = 0;
+    }
+
+    // Update current idle animation
+    if (currentIdleAnim !== 'none') {
+      idleAnimFrame += 0.1;
+      if (now - idleAnimStartTime > IDLE_ANIM_DURATION) {
+        // Animation finished
+        currentIdleAnim = 'none';
+        idleAnimFrame = 0;
+        // Schedule next idle animation
+        nextIdleAnimTime = now + IDLE_ANIM_MIN_DELAY + Math.random() * (IDLE_ANIM_MAX_DELAY - IDLE_ANIM_MIN_DELAY);
       }
     }
   } else {
+    // Moving - reset all idle states
     isWaving = false;
     waveFrame = 0;
+    currentIdleAnim = 'none';
+    idleAnimFrame = 0;
   }
 
   // Double jump logic - only trigger on key press, not hold
@@ -3212,97 +3249,83 @@ function drawPlayer(): void {
     drawLLimb(centerX, shoulderY, -swingAmount, upperArm, forearm, true);
     drawLLimb(centerX, shoulderY, swingAmount, upperArm, forearm, false);
   } else {
-    if (isGirlMode) {
-      // Girl standing: arms stick straight out to the sides (looks better with dress)
-      // Left arm with outline (white outside, thin black inside)
-      gameCtx.strokeStyle = '#fff';
-      gameCtx.lineWidth = 3.6;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
-      gameCtx.stroke();
-      gameCtx.strokeStyle = '#000';
-      gameCtx.lineWidth = 3.3;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
-      gameCtx.stroke();
-      gameCtx.strokeStyle = bodyColor;
-      gameCtx.lineWidth = 3;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
-      gameCtx.stroke();
-      // Right arm with outline (white outside, thin black inside)
-      gameCtx.strokeStyle = '#fff';
-      gameCtx.lineWidth = 3.6;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
-      gameCtx.stroke();
-      gameCtx.strokeStyle = '#000';
-      gameCtx.lineWidth = 3.3;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
-      gameCtx.stroke();
-      gameCtx.strokeStyle = bodyColor;
-      gameCtx.lineWidth = 3;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
-      gameCtx.stroke();
-    } else {
-      // Boy standing: hands on waist pose (arms angle out then down to hips)
-      const waistY = bodyEndY - 2; // Just above where legs start
-      const elbowOutX = 7; // How far elbow sticks out
-      const elbowY = shoulderY + 5; // Elbow height
-      const handInX = 4; // How far in the hand is (on waist)
+    // Standing pose - check for idle animations
+    const scratchProgress = Math.sin(idleAnimFrame * 2) * 0.5 + 0.5; // 0 to 1 oscillating
 
-      // Left arm with outline
+    // Helper to draw arm with outline
+    const drawArmWithOutline = (points: {x: number, y: number}[]) => {
+      if (points.length < 2) return;
       gameCtx.strokeStyle = '#fff';
       gameCtx.lineWidth = 3.6;
       gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - elbowOutX, elbowY);
-      gameCtx.lineTo(centerX - handInX, waistY);
+      gameCtx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) gameCtx.lineTo(points[i].x, points[i].y);
       gameCtx.stroke();
       gameCtx.strokeStyle = '#000';
       gameCtx.lineWidth = 3.3;
       gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - elbowOutX, elbowY);
-      gameCtx.lineTo(centerX - handInX, waistY);
+      gameCtx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) gameCtx.lineTo(points[i].x, points[i].y);
       gameCtx.stroke();
       gameCtx.strokeStyle = bodyColor;
       gameCtx.lineWidth = 3;
       gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - elbowOutX, elbowY);
-      gameCtx.lineTo(centerX - handInX, waistY);
+      gameCtx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) gameCtx.lineTo(points[i].x, points[i].y);
       gameCtx.stroke();
-      // Right arm with outline
-      gameCtx.strokeStyle = '#fff';
-      gameCtx.lineWidth = 3.6;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + elbowOutX, elbowY);
-      gameCtx.lineTo(centerX + handInX, waistY);
-      gameCtx.stroke();
-      gameCtx.strokeStyle = '#000';
-      gameCtx.lineWidth = 3.3;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + elbowOutX, elbowY);
-      gameCtx.lineTo(centerX + handInX, waistY);
-      gameCtx.stroke();
-      gameCtx.strokeStyle = bodyColor;
-      gameCtx.lineWidth = 3;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + elbowOutX, elbowY);
-      gameCtx.lineTo(centerX + handInX, waistY);
-      gameCtx.stroke();
+    };
+
+    if (currentIdleAnim === 'headScratch') {
+      // Right arm reaches up to scratch head
+      const scratchY = headY - headRadius + scratchProgress * 3;
+      drawArmWithOutline([
+        {x: centerX, y: shoulderY},
+        {x: centerX + 4, y: shoulderY - 4},
+        {x: centerX + 2, y: scratchY}
+      ]);
+      // Left arm relaxed at side
+      drawArmWithOutline([
+        {x: centerX, y: shoulderY},
+        {x: centerX - 6, y: shoulderY + 6},
+        {x: centerX - 4, y: shoulderY + 12}
+      ]);
+    } else if (currentIdleAnim === 'buttScratch') {
+      // Right arm reaches behind to scratch butt
+      const scratchX = centerX - 3 + scratchProgress * 2;
+      drawArmWithOutline([
+        {x: centerX, y: shoulderY},
+        {x: centerX + 2, y: shoulderY + 8},
+        {x: scratchX, y: bodyEndY + 2}
+      ]);
+      // Left arm relaxed at side
+      drawArmWithOutline([
+        {x: centerX, y: shoulderY},
+        {x: centerX - 6, y: shoulderY + 6},
+        {x: centerX - 4, y: shoulderY + 12}
+      ]);
+    } else if (currentIdleAnim === 'weightShift') {
+      // Subtle weight shift - arms sway slightly
+      const shiftAmount = Math.sin(idleAnimFrame) * 2;
+      if (isGirlMode) {
+        drawArmWithOutline([{x: centerX, y: shoulderY}, {x: centerX - limbLength + shiftAmount, y: shoulderY + 2}]);
+        drawArmWithOutline([{x: centerX, y: shoulderY}, {x: centerX + limbLength + shiftAmount, y: shoulderY + 2}]);
+      } else {
+        const waistY = bodyEndY - 2;
+        drawArmWithOutline([{x: centerX, y: shoulderY}, {x: centerX - 7 + shiftAmount, y: shoulderY + 5}, {x: centerX - 4, y: waistY}]);
+        drawArmWithOutline([{x: centerX, y: shoulderY}, {x: centerX + 7 + shiftAmount, y: shoulderY + 5}, {x: centerX + 4, y: waistY}]);
+      }
+    } else if (isGirlMode) {
+      // Girl standing: arms stick straight out to the sides
+      drawArmWithOutline([{x: centerX, y: shoulderY}, {x: centerX - limbLength, y: shoulderY + 2}]);
+      drawArmWithOutline([{x: centerX, y: shoulderY}, {x: centerX + limbLength, y: shoulderY + 2}]);
+    } else {
+      // Boy standing: hands on waist pose
+      const waistY = bodyEndY - 2;
+      const elbowOutX = 7;
+      const elbowY = shoulderY + 5;
+      const handInX = 4;
+      drawArmWithOutline([{x: centerX, y: shoulderY}, {x: centerX - elbowOutX, y: elbowY}, {x: centerX - handInX, y: waistY}]);
+      drawArmWithOutline([{x: centerX, y: shoulderY}, {x: centerX + elbowOutX, y: elbowY}, {x: centerX + handInX, y: waistY}]);
     }
   }
 
@@ -3346,6 +3369,11 @@ function drawPlayer(): void {
     // Running: simple wiggly legs
     drawLineWithOutline(centerX, hipY, centerX - 4 + legSwing, hipY + limbLength);
     drawLineWithOutline(centerX, hipY, centerX + 4 - legSwing, hipY + limbLength);
+  } else if (currentIdleAnim === 'weightShift') {
+    // Weight shift: one leg bent slightly, weight on the other
+    const shiftAmount = Math.sin(idleAnimFrame) * 2;
+    drawLineWithOutline(centerX, hipY, centerX - 4 + shiftAmount, hipY + limbLength);
+    drawLineWithOutline(centerX, hipY, centerX + 5 + shiftAmount * 0.5, hipY + limbLength - 2); // Slightly bent
   } else {
     // Standing: legs straight down, slight spread
     drawLineWithOutline(centerX, hipY, centerX - 4, hipY + limbLength);
