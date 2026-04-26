@@ -76,10 +76,27 @@ let waveStartTime = 0;
 const IDLE_WAVE_DELAY = 120000; // Start waving after 2 minutes of no movement
 const WAVE_DURATION = 2000; // Wave for 2 seconds
 
+// Ambient behavior system - Smudgy stays alive!
+let ambientMode = false; // When true, Smudgy does idle behaviors even when game is 'none'
+let isNapping = false;
+let napStartTime = 0;
+let lastDrawTime = 0; // Track when user last drew something
+let cursorX = 0;
+let cursorY = 0;
+let isChasingCursor = false;
+let chaseStartTime = 0;
+const NAP_DELAY = 180000; // Start napping after 3 minutes of no drawing
+const NAP_DURATION = 10000; // Nap for 10 seconds
+const CHASE_DURATION = 3000; // Chase cursor for 3 seconds
+const CHASE_CHANCE = 0.001; // Chance per frame to start chasing (rare)
+
 // Player color
 let playerColor = localStorage.getItem('oo_player_color') || '#ffffff';
 let playerHat = localStorage.getItem('oo_player_hat') || 'none';
 let playerAccessory = localStorage.getItem('oo_player_accessory') || 'none';
+
+// Respawn setting for explore mode (default true)
+let shouldRespawnInExplore = localStorage.getItem('oo_explore_respawn') !== 'false';
 
 // Custom screen name (overrides Firebase displayName if set)
 let customScreenName = localStorage.getItem('oo_screen_name') || '';
@@ -93,7 +110,26 @@ let isGirlMode = localStorage.getItem('oo_player_girl') === 'true';
 
 // Face style ('smudgy' = pink circle eye, 'normal' = classic stick figure face)
 let faceStyle = localStorage.getItem('oo_player_face') || 'smudgy';
+
+// Smooth eye direction for Smudgy face (-1 = left, 0 = center, 1 = right)
+let eyeLookDirection = 0;
+const EYE_TURN_SPEED = 0.02; // How fast the eye turns to center when stopped
 const FACE_STYLES = ['smudgy', 'normal'];
+
+// Body reset delay - wait for face to turn before arms reset
+let stoppingTimer = 0; // Counts up when stopped, body resets after threshold
+const BODY_RESET_DELAY = 15; // Frames to wait before body resets (about 0.25 sec)
+
+// Eye glance behavior - periodic look back during explore/tag
+let lastGlanceX = 0; // X position at last glance
+let nextGlanceDistance = 35; // First glance after 8-10 steps (~35px)
+let isGlancing = false;
+let glanceTimer = 0;
+const GLANCE_DURATION = 60; // Frames to hold glance (longer look back, gauging situation)
+const GLANCE_MIN_EXPLORE = 400; // Min pixels between glances in explore (long wait)
+const GLANCE_MAX_EXPLORE = 600; // Max pixels between glances in explore
+const GLANCE_MIN_TAG = 40; // Min pixels between glances when being chased
+const GLANCE_MAX_TAG = 80; // Max pixels between glances when being chased
 
 // Blood splat effects
 interface BloodSplat {
@@ -191,13 +227,20 @@ let otherUsersCourses: Course[] = [];
 // Game physics
 const GRAVITY = 0.6;
 const JUMP_FORCE = -12;  // Reduced slightly for smaller player
-const MOVE_SPEED = 3;    // 60% of original 5
+const MOVE_SPEED = 4;    // 30% faster than previous 3
 const FRICTION = 0.7;    // Quick stop when not pressing keys
 const MAX_FALL_SPEED = 14; // Cap fall speed to prevent tunneling through platforms
 const COLLISION_SUBSTEP_SIZE = 6; // Max pixels per collision check step (smaller = more precise)
 
 // Input state
 const keys: { [key: string]: boolean } = {};
+
+// Clear all keyboard state (prevent stuck keys)
+function clearKeys(): void {
+  for (const key in keys) {
+    keys[key] = false;
+  }
+}
 
 // Animation
 let animationId: number | null = null;
@@ -214,7 +257,7 @@ let lives = 3;
 let maxLives = 3;
 let isDead = false;
 let deathTime = 0;
-const RESPAWN_DELAY = 2000; // 2 seconds
+const RESPAWN_DELAY = 1500; // 1.5 seconds total
 const DEATH_Y_THRESHOLD = 2000; // Fall this far below viewport to die
 
 // Power-up state
@@ -229,6 +272,9 @@ let isCountingDown = false;
 let countdownStartTime = 0;
 const COUNTDOWN_DURATION = 2000; // 2 seconds
 let notification: { text: string; subtext?: string; endTime: number } | null = null;
+
+// Centered popup (for onboarding controls hint)
+let centeredPopup: { text: string; endTime: number; startTime: number } | null = null;
 
 // Player frozen during countdown
 let playerFrozen = false;
@@ -298,7 +344,7 @@ export function initGame(): void {
 
   // Listen for game mode changes
   document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
-    setGameMode(e.detail.mode, e.detail.tool, e.detail.playmode);
+    setGameMode(e.detail.mode, e.detail.tool, e.detail.playmode, e.detail.spawnPos, e.detail.fromOnboarding);
   }) as EventListener);
 
   // Listen for undo/clear in build mode
@@ -360,6 +406,11 @@ export function initGame(): void {
     syncPlayerToCloud();
   }) as EventListener);
 
+  // Listen for respawn setting changes
+  document.addEventListener('oo:respawnsetting', ((e: CustomEvent) => {
+    shouldRespawnInExplore = e.detail.respawn;
+  }) as EventListener);
+
   // Listen for tag game toggle
   document.addEventListener('oo:toggletag', () => {
     console.log('[OpenOverlay] Tag toggle requested, gameMode:', gameMode);
@@ -402,6 +453,32 @@ export function initGame(): void {
     }
   });
 
+  // Track drawing activity for ambient behavior
+  document.addEventListener('oo:save', () => {
+    lastDrawTime = performance.now();
+  });
+
+  // Track cursor position for cursor chasing
+  document.addEventListener('mousemove', (e) => {
+    cursorX = e.pageX;
+    cursorY = e.pageY;
+  });
+
+  // Listen for dismiss Smudgy request
+  document.addEventListener('oo:dismisssmudgy', () => {
+    if (ambientMode) {
+      // Stop ambient behavior and hide player
+      ambientMode = false;
+      isNapping = false;
+      isChasingCursor = false;
+      gameMode = 'none';
+      document.dispatchEvent(new CustomEvent('oo:ambientend'));
+    }
+  });
+
+  // Initialize lastDrawTime
+  lastDrawTime = performance.now();
+
   console.log('[OpenOverlay] Game initialized');
 }
 
@@ -441,10 +518,16 @@ function resizeGameCanvas(): void {
   render();
 }
 
-function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode?: 'explore' | 'race'): void {
+// Track initial spawn position from onboarding (temporary)
+let initialSpawnPosition: { x: number; y: number } | null = null;
+let isFromOnboarding = false;
+
+function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode?: 'explore' | 'race', spawnPos?: { x: number; y: number }, fromOnboarding?: boolean): void {
   gameMode = mode;
   if (tool) buildTool = tool as any;
   if (newPlayMode) playMode = newPlayMode;
+  if (spawnPos) initialSpawnPosition = spawnPos;
+  isFromOnboarding = fromOnboarding || false;
 
   // Flash mode info when entering play mode
   if (mode === 'play') {
@@ -664,7 +747,7 @@ function gameLoop(currentTime: number): void {
   update(deltaTime);
   render();
 
-  if (gameMode === 'play' || gameMode === 'build') {
+  if (gameMode === 'play' || gameMode === 'build' || ambientMode) {
     animationId = requestAnimationFrame(gameLoop);
   } else {
     // Clear animationId when loop stops naturally
@@ -673,6 +756,18 @@ function gameLoop(currentTime: number): void {
 }
 
 function respawnPlayer(): void {
+  // Use initial spawn position if provided (from onboarding)
+  if (initialSpawnPosition) {
+    player.x = initialSpawnPosition.x - player.width / 2;
+    player.y = initialSpawnPosition.y - player.height;
+    initialSpawnPosition = null; // Clear after using
+    player.vx = 0;
+    player.vy = 0;
+    player.onGround = true; // Start on ground since coming from button
+    player.jumpsRemaining = player.maxJumps;
+    return;
+  }
+
   // Find spawn point or start point
   const spawnPoint = currentCourse.checkpoints.find(c => c.type === 'spawn');
   const startPoint = currentCourse.checkpoints.find(c => c.type === 'start');
@@ -694,6 +789,9 @@ function respawnPlayer(): void {
 }
 
 function startCountdown(): void {
+  // Clear any stuck keyboard state
+  clearKeys();
+
   // Position player at spawn point
   respawnPlayer();
 
@@ -723,6 +821,18 @@ function showNotification(text: string, subtext?: string, duration: number = 100
     text,
     subtext,
     endTime: performance.now() + duration,
+  };
+}
+
+/**
+ * Show a centered text popup (used for onboarding controls hint)
+ */
+function showCenteredPopup(text: string, duration: number = 1000): void {
+  const now = performance.now();
+  centeredPopup = {
+    text,
+    startTime: now,
+    endTime: now + duration,
   };
 }
 
@@ -1081,6 +1191,14 @@ function update(dt: number): void {
         showGamePopup('gameover');
         return;
       }
+      // In explore mode with respawn disabled, dismiss character
+      if (playMode === 'explore' && !shouldRespawnInExplore) {
+        isDead = false;
+        notification = null;
+        // Dispatch event to stop game mode (dismiss character)
+        document.dispatchEvent(new CustomEvent('oo:gamemode', { detail: { mode: 'none' } }));
+        return;
+      }
       // Respawn with brief grace period for collision
       isDead = false;
       respawnPlayer();
@@ -1121,6 +1239,59 @@ function update(dt: number): void {
 
   // Decrease landing slide frames
   if (landingSlideFrames > 0) landingSlideFrames--;
+
+  // Update eye look direction for Smudgy face
+  const isMoving = Math.abs(player.vx) > 0.5;
+  if (isMoving) {
+    // Check if it's time to glance back (explore mode, or during tag if we're not IT)
+    const isBeingChased = tagGameState?.gameActive && !isPlayerIt();
+    const shouldGlance = playMode === 'explore' || isBeingChased;
+    const distanceTraveled = Math.abs(player.x - lastGlanceX);
+
+    if (shouldGlance && distanceTraveled > nextGlanceDistance && !isGlancing) {
+      // Start a glance back
+      isGlancing = true;
+      glanceTimer = 0;
+      lastGlanceX = player.x;
+      // Set random distance for next glance (more frequent when being chased)
+      if (isBeingChased) {
+        nextGlanceDistance = GLANCE_MIN_TAG + Math.random() * (GLANCE_MAX_TAG - GLANCE_MIN_TAG);
+      } else {
+        nextGlanceDistance = GLANCE_MIN_EXPLORE + Math.random() * (GLANCE_MAX_EXPLORE - GLANCE_MIN_EXPLORE);
+      }
+    }
+
+    if (isGlancing) {
+      // Look backwards (-1 in local coords = opposite of forward)
+      eyeLookDirection = -1;
+      glanceTimer++;
+      if (glanceTimer >= GLANCE_DURATION) {
+        isGlancing = false;
+      }
+    } else {
+      // Normal forward look (+1 in local coords)
+      eyeLookDirection = 1;
+    }
+    stoppingTimer = 0; // Reset stopping timer while moving
+  } else {
+    // When stopped, slowly turn eye toward center
+    // Start from the side we were facing (based on facingRight)
+    isGlancing = false; // Reset glance when stopped
+    nextGlanceDistance = 50; // Reset to quick first glance when starting to move again
+    if (stoppingTimer === 0 && Math.abs(eyeLookDirection) > 0.1) {
+      // Just stopped - set initial direction based on which way we were running
+      // If we were running left (facingRight=false), eye should start on LEFT of screen
+      // Since context is NOT flipped when stopped, we use negative for left
+      eyeLookDirection = player.facingRight ? 1 : -1;
+    }
+    if (Math.abs(eyeLookDirection) > 0.1) {
+      eyeLookDirection *= (1 - EYE_TURN_SPEED);
+    } else {
+      eyeLookDirection = 0;
+    }
+    // Increment stopping timer - body waits for face to reset
+    stoppingTimer++;
+  }
 
   // Check for idle wave animation
   if (player.onGround && Math.abs(player.vx) < 0.1) {
@@ -1262,6 +1433,11 @@ function update(dt: number): void {
           // Check if just landed
           if (!wasOnGround && Math.abs(player.vx) > 0.5) {
             landingSlideFrames = 8;
+          }
+          // Show onboarding hint when landing from onboarding
+          if (!wasOnGround && isFromOnboarding) {
+            isFromOnboarding = false;
+            showCenteredPopup('Move with WASD/Arrows!', 1500);
           }
           player.y = targetY;
           player.vy = 0;
@@ -2167,7 +2343,9 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     // 4. Face features (on white face)
     const remoteFaceStyle = (rp as any).faceStyle || 'smudgy';
     if (remoteFaceStyle === 'smudgy') {
-      drawSmudgyFace(gameCtx, centerX, headY, headRadius, rp.vx, rp.vy, rp.onGround !== false);
+      // For remote players, calculate look direction from velocity
+      const remoteLookDir = rp.vx > 0.5 ? 1 : rp.vx < -0.5 ? -1 : 0;
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, remoteLookDir, rp.vy, rp.onGround !== false, color);
     } else {
       gameCtx.fillStyle = color;
       if (isMoving) {
@@ -2208,10 +2386,20 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.closePath();
     gameCtx.fill();
 
-    // 6. Legs (under dress) - scaled 75%
+    // 6. Legs (under dress) - scaled 75% with thin black outline
+    const legSwingGirl = isMoving ? Math.sin(animFrame * Math.PI) * 6 : 0;
+    // Draw black outline first
+    gameCtx.strokeStyle = '#000';
+    gameCtx.lineWidth = 2.5;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX - 3, bodyEndY);
+    gameCtx.lineTo(centerX - 5 + legSwingGirl, bodyEndY + limbLength);
+    gameCtx.moveTo(centerX + 3, bodyEndY);
+    gameCtx.lineTo(centerX + 5 - legSwingGirl, bodyEndY + limbLength);
+    gameCtx.stroke();
+    // Then white legs
     gameCtx.strokeStyle = '#fff';
     gameCtx.lineWidth = 2;
-    const legSwingGirl = isMoving ? Math.sin(animFrame * Math.PI) * 6 : 0;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX - 3, bodyEndY);
     gameCtx.lineTo(centerX - 5 + legSwingGirl, bodyEndY + limbLength);
@@ -2223,19 +2411,67 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
 
   } else {
     // === BOY CHARACTER - same detailed style as local player ===
-
-    // Head circle (stroked)
-    gameCtx.beginPath();
-    gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
-    gameCtx.stroke();
-
     const remoteFaceStyleBoy = (rp as any).faceStyle || 'smudgy';
+    const topOfHead = headY - headRadius;
+
     if (remoteFaceStyleBoy === 'smudgy') {
-      // Fill head white for Smudgy face
-      gameCtx.fillStyle = '#ffffff';
-      gameCtx.fill();
-      drawSmudgyFace(gameCtx, centerX, headY, headRadius, rp.vx, rp.vy, rp.onGround !== false);
+      // Draw hair FIRST (behind head)
+      const remoteAnimFrame = (rp as any).animFrame || 0;
+      gameCtx.strokeStyle = color;
+      gameCtx.lineWidth = 2.5;
+      gameCtx.lineCap = 'round';
+
+      const hairWiggle = Math.sin(remoteAnimFrame * Math.PI * 2) * 2;
+
+      if (isMoving) {
+        // Running: hairs stick up then bend back in wind
+        gameCtx.beginPath();
+        gameCtx.moveTo(centerX + 2, topOfHead + 2);
+        gameCtx.bezierCurveTo(
+          centerX + 2, topOfHead - 6,     // Go UP first
+          centerX - 6, topOfHead - 4,     // Then curve back
+          centerX - 12 + hairWiggle, topOfHead - 2
+        );
+        gameCtx.stroke();
+
+        // Back hair
+        gameCtx.beginPath();
+        gameCtx.moveTo(centerX - 1, topOfHead + 2);
+        gameCtx.bezierCurveTo(
+          centerX - 1, topOfHead - 4,
+          centerX - 5, topOfHead - 2,
+          centerX - 9 + hairWiggle * 0.7, topOfHead
+        );
+        gameCtx.stroke();
+      } else {
+        // Standing: mohawk spikes going straight up
+        gameCtx.beginPath();
+        gameCtx.moveTo(centerX + 1, topOfHead + 1);
+        gameCtx.quadraticCurveTo(centerX + 1, topOfHead - 5, centerX, topOfHead - 9);
+        gameCtx.stroke();
+
+        gameCtx.beginPath();
+        gameCtx.moveTo(centerX - 2, topOfHead + 2);
+        gameCtx.quadraticCurveTo(centerX - 2, topOfHead - 2, centerX - 2, topOfHead - 5);
+        gameCtx.stroke();
+      }
+
+      // Now draw head circle (on top of hair)
+      gameCtx.strokeStyle = color;
+      gameCtx.lineWidth = 3;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      gameCtx.stroke();
+
+      // Draw Smudgy face (pink circle with transparent cutout)
+      const remoteLookDirBoy = rp.vx > 0.5 ? 1 : rp.vx < -0.5 ? -1 : 0;
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, remoteLookDirBoy, rp.vy, rp.onGround !== false, color);
     } else {
+      // Head circle first
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      gameCtx.stroke();
+
       // Hair - marker tip style (scaled 75%)
       gameCtx.fillStyle = color;
       gameCtx.beginPath();
@@ -2281,23 +2517,53 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.lineTo(centerX, bodyEndY);
     gameCtx.stroke();
 
-    // Arms (scaled 75%)
-    const armY = bodyStartY + 3;
-    const armSwing = isMoving ? Math.sin(animFrame * Math.PI) * 6 : 0;
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, armY);
-    gameCtx.lineTo(centerX - limbLength, armY + 6 + armSwing);
-    gameCtx.moveTo(centerX, armY);
-    gameCtx.lineTo(centerX + limbLength, armY + 6 - armSwing);
-    gameCtx.stroke();
+    // Helper to draw an L-shaped limb for remote player
+    const drawRemoteLLimb = (
+      startX: number, startY: number,
+      angle: number,
+      upperLen: number, lowerLen: number,
+      isLeft: boolean
+    ) => {
+      const elbowX = startX + Math.sin(angle) * upperLen * (isLeft ? -1 : 1);
+      const elbowY = startY + Math.cos(angle) * upperLen;
+      const lowerAngle = angle + (isLeft ? -1.2 : 1.2);
+      const endX = elbowX + Math.sin(lowerAngle) * lowerLen * (isLeft ? -1 : 1);
+      const endY = elbowY + Math.cos(lowerAngle) * lowerLen;
 
-    // Legs (scaled 75%)
+      gameCtx.beginPath();
+      gameCtx.moveTo(startX, startY);
+      gameCtx.lineTo(elbowX, elbowY);
+      gameCtx.lineTo(endX, endY);
+      gameCtx.stroke();
+    };
+
+    const shoulderY = bodyStartY + 3;
+    const hipY = bodyEndY;
+    const walkCycle = Math.sin(animFrame * Math.PI);
+    const upperArm = 6;
+    const forearm = 6;
+    const thigh = 6;
+    const calf = 7;
+
+    // Arms
+    if (isMoving) {
+      const armSwing = walkCycle * 0.8;
+      drawRemoteLLimb(centerX, shoulderY, -armSwing * 0.6, upperArm, forearm, true);
+      drawRemoteLLimb(centerX, shoulderY, armSwing * 0.6, upperArm, forearm, false);
+    } else {
+      drawRemoteLLimb(centerX, shoulderY, 0.2, upperArm, forearm, true);
+      drawRemoteLLimb(centerX, shoulderY, 0.2, upperArm, forearm, false);
+    }
+
+    // Legs - simple wiggly sticks
     const legSwing = isMoving ? Math.sin(animFrame * Math.PI) * 8 : 0;
     gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX - 6 + legSwing, bodyEndY + limbLength);
-    gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX + 6 - legSwing, bodyEndY + limbLength);
+    gameCtx.moveTo(centerX, hipY);
+    gameCtx.lineTo(centerX - 4 + legSwing, hipY + limbLength);
+    gameCtx.stroke();
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, hipY);
+    gameCtx.lineTo(centerX + 4 - legSwing, hipY + limbLength);
     gameCtx.stroke();
   }
 
@@ -2435,43 +2701,54 @@ function drawRemoteHat(centerX: number, headY: number, headRadius: number, hat: 
 }
 
 /**
- * Draw Smudgy face - pink circle with white intrusion that follows movement
+ * Draw Smudgy face - pink circle with transparent cutout that follows look direction
+ * lookDir: -1 to 1, negative = looking left, positive = looking right
+ * bodyColor: the color for the head outline (matches body)
  */
-function drawSmudgyFace(ctx: CanvasRenderingContext2D, centerX: number, headY: number, headRadius: number, vx: number, vy: number, onGround: boolean): void {
-  const PINK = '#ff69b4';
-
-  // Pink circle - almost fills head
-  ctx.fillStyle = PINK;
+function drawSmudgyFace(ctx: CanvasRenderingContext2D, centerX: number, headY: number, headRadius: number, lookDir: number, vy: number, onGround: boolean, bodyColor: string): void {
+  // Pink circle - always pink for Smudgy! (brand color)
+  // Reduced gap to 10% of original (was headRadius - 1, now headRadius - 0.1)
+  ctx.fillStyle = '#ff69b4';
   ctx.beginPath();
-  ctx.arc(centerX + 1, headY, headRadius - 1.5, 0, Math.PI * 2);
+  ctx.arc(centerX, headY, headRadius - 0.1, 0, Math.PI * 2);
   ctx.fill();
 
-  // White intrusion position based on movement
-  // Default: slightly down and forward (looking where going)
-  let eyeOffsetX = headRadius - 2.5;
-  let eyeOffsetY = 1.5;  // Slightly down
+  // Eye cutout position - use signed lookDir so eye is on correct side when stopped
+  // Negative lookDir = eye on left, positive = eye on right
+  const maxOffset = headRadius - 3;
+  const eyeOffsetX = lookDir * maxOffset; // Signed value!
 
-  if (!onGround && vy < -2) {
-    // Jumping up - look up
-    eyeOffsetY = -2;
-    if (vx > 1) {
-      eyeOffsetX = headRadius - 2;
-    } else if (vx < -1) {
-      eyeOffsetX = headRadius - 2;
-    } else {
-      // Straight up
-      eyeOffsetX = headRadius - 3;
-      eyeOffsetY = -3;
+  // Vertical offset - look UP when jumping (almost straight up with slight angle)
+  let eyeOffsetY = 0;
+  let jumpingEyeXReduction = 1; // Multiplier to reduce X offset when looking up
+  if (!onGround) {
+    if (vy < -2) {
+      eyeOffsetY = -4; // Looking up high while jumping
+      jumpingEyeXReduction = 0.3; // Move eye more toward center when looking up
+    } else if (vy > 2) {
+      eyeOffsetY = 1; // Slight look down when falling
     }
-  } else if (!onGround && vy > 2) {
-    // Falling - look down
-    eyeOffsetY = 3;
+  } else if (Math.abs(lookDir) > 0.3) {
+    eyeOffsetY = 1; // Slightly down when looking to the side
   }
 
-  ctx.fillStyle = '#ffffff';
+  const cutoutRadius = headRadius - 4;
+  const finalEyeOffsetX = eyeOffsetX * jumpingEyeXReduction;
+
+  // Cut out the eye hole using destination-out (transparent hole)
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
   ctx.beginPath();
-  ctx.arc(centerX + eyeOffsetX, headY + eyeOffsetY, headRadius - 3.5, 0, Math.PI * 2);
+  ctx.arc(centerX + finalEyeOffsetX, headY + eyeOffsetY, cutoutRadius, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
+
+  // Redraw head outline ON TOP so it covers any cutout bleeding past the edge
+  ctx.strokeStyle = bodyColor;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+  ctx.stroke();
 }
 
 function drawPlayer(): void {
@@ -2484,11 +2761,24 @@ function drawPlayer(): void {
 
   gameCtx.save();
 
-  // Flip if facing left
-  if (!player.facingRight) {
+  // Only flip if actually moving - face forward when stopped
+  const isMoving = Math.abs(player.vx) > 0.5;
+  if (isMoving && !player.facingRight) {
     gameCtx.translate(x + w / 2, 0);
     gameCtx.scale(-1, 1);
     gameCtx.translate(-(x + w / 2), 0);
+  }
+
+  // Body lean when running (10 degrees forward)
+  const LEAN_ANGLE = 0.17; // ~10 degrees in radians
+  const leanAmount = isMoving ? LEAN_ANGLE : 0;
+  if (leanAmount !== 0) {
+    // Rotate around the hip point (bottom of body)
+    const pivotX = x + w / 2;
+    const pivotY = y + h - 5; // Near the feet
+    gameCtx.translate(pivotX, pivotY);
+    gameCtx.rotate(leanAmount);
+    gameCtx.translate(-pivotX, -pivotY);
   }
 
   // Stick figure dimensions (scaled 75% for smaller player)
@@ -2512,31 +2802,53 @@ function drawPlayer(): void {
   gameCtx.shadowOffsetX = 2;
   gameCtx.shadowOffsetY = 2;
 
-  const isMoving = Math.abs(player.vx) > 0.5;
 
   if (isGirlMode) {
     // === GIRL CHARACTER - solid shapes, no see-through ===
+    const hairWiggle = Math.sin(player.animFrame * Math.PI * 2) * 3;
 
-    // 1. Draw hair first (back layer) - smooth rounded bob
+    // 1. Draw hair first (back layer)
     gameCtx.fillStyle = playerColor;
     gameCtx.beginPath();
-    // Start at bottom left of hair
-    gameCtx.moveTo(centerX - headRadius - 2, headY + 8);
-    // Left side going up
-    gameCtx.lineTo(centerX - headRadius - 1, headY - 2);
-    // Curve over the top of head
-    gameCtx.quadraticCurveTo(centerX - headRadius + 2, headY - headRadius - 4, centerX, headY - headRadius - 3);
-    gameCtx.quadraticCurveTo(centerX + headRadius - 2, headY - headRadius - 4, centerX + headRadius + 1, headY - 2);
-    // Right side going down
-    gameCtx.lineTo(centerX + headRadius + 2, headY + 8);
-    // Curve back under
-    gameCtx.quadraticCurveTo(centerX + headRadius, headY + 10, centerX + headRadius - 2, headY + 10);
-    gameCtx.lineTo(centerX - headRadius + 2, headY + 10);
-    gameCtx.quadraticCurveTo(centerX - headRadius, headY + 10, centerX - headRadius - 2, headY + 8);
-    gameCtx.closePath();
-    gameCtx.fill();
 
-    // 2. Draw face circle (white/light filled)
+    if (isMoving) {
+      // Running: hair trails BEHIND on the LEFT side in local coords
+      // (When character is flipped for left movement, this becomes right in world coords)
+      // Hair covers back of head and flows back with wiggle
+      gameCtx.moveTo(centerX, headY - headRadius - 3);
+      // Curve over back/left of head
+      gameCtx.quadraticCurveTo(centerX - headRadius + 2, headY - headRadius - 4, centerX - headRadius - 1, headY - 2);
+      // Back side goes down and angles away with wiggle (blowing opposite to movement)
+      gameCtx.lineTo(centerX - headRadius - 2, headY + 4);
+      gameCtx.quadraticCurveTo(centerX - headRadius - 4 - hairWiggle, headY + 8, centerX - headRadius - 3 - hairWiggle, headY + 12);
+      // Bottom curves back in toward center
+      gameCtx.quadraticCurveTo(centerX - headRadius, headY + 11, centerX - headRadius + 3, headY + 10);
+      // Connect to back/left side of head (covers the "bald spot")
+      gameCtx.lineTo(centerX - 2, headY + headRadius);
+      gameCtx.closePath();
+      gameCtx.fill();
+    } else {
+      // Standing: normal symmetrical bob hair
+      gameCtx.moveTo(centerX - headRadius - 2, headY + 8);
+      gameCtx.lineTo(centerX - headRadius - 1, headY - 2);
+      gameCtx.quadraticCurveTo(centerX - headRadius + 2, headY - headRadius - 4, centerX, headY - headRadius - 3);
+      gameCtx.quadraticCurveTo(centerX + headRadius - 2, headY - headRadius - 4, centerX + headRadius + 1, headY - 2);
+      gameCtx.lineTo(centerX + headRadius + 2, headY + 8);
+      gameCtx.quadraticCurveTo(centerX + headRadius, headY + 10, centerX + headRadius - 2, headY + 10);
+      gameCtx.lineTo(centerX - headRadius + 2, headY + 10);
+      gameCtx.quadraticCurveTo(centerX - headRadius, headY + 10, centerX - headRadius - 2, headY + 8);
+      gameCtx.closePath();
+      gameCtx.fill();
+    }
+
+    // 2. Draw face circle (white/light filled) with thin black outline
+    // First draw thin black outline
+    gameCtx.strokeStyle = '#000';
+    gameCtx.lineWidth = 0.5;
+    gameCtx.beginPath();
+    gameCtx.arc(centerX, headY, headRadius - 0.5, 0, Math.PI * 2);
+    gameCtx.stroke();
+    // Then white fill
     gameCtx.fillStyle = '#fff';
     gameCtx.beginPath();
     gameCtx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
@@ -2554,7 +2866,7 @@ function drawPlayer(): void {
 
     // 4. Face features (on white face)
     if (faceStyle === 'smudgy') {
-      drawSmudgyFace(gameCtx, centerX, headY, headRadius, player.vx, player.vy, player.onGround);
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, eyeLookDirection, player.vy, player.onGround, playerColor);
     } else {
       gameCtx.fillStyle = playerColor;
       if (isMoving) {
@@ -2598,18 +2910,98 @@ function drawPlayer(): void {
   } else {
     // === BOY CHARACTER - stick figure style ===
 
-    // Head circle (stroked)
-    gameCtx.beginPath();
-    gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
-    gameCtx.stroke();
+    const topOfHead = headY - headRadius;
 
     if (faceStyle === 'smudgy') {
-      // Fill head with white for Smudgy face
-      gameCtx.fillStyle = '#ffffff';
-      gameCtx.fill();
-      // Draw Smudgy face
-      drawSmudgyFace(gameCtx, centerX, headY, headRadius, player.vx, player.vy, player.onGround);
+      // Draw hair FIRST (behind the head) with outlines
+      gameCtx.lineCap = 'round';
+      const hairWiggle = Math.sin(player.animFrame * Math.PI * 2) * 2;
+
+      // Helper to draw hair with outline
+      const drawHairStroke = (drawPath: () => void) => {
+        // White outline (outermost)
+        gameCtx.strokeStyle = '#fff';
+        gameCtx.lineWidth = 3.1;
+        drawPath();
+        gameCtx.stroke();
+        // Thin black inside
+        gameCtx.strokeStyle = '#000';
+        gameCtx.lineWidth = 2.8;
+        drawPath();
+        gameCtx.stroke();
+        // Main color
+        gameCtx.strokeStyle = playerColor;
+        gameCtx.lineWidth = 2.5;
+        drawPath();
+        gameCtx.stroke();
+      };
+
+      if (isMoving) {
+        // Running: hairs stick up high then curve back slightly (shorter, more upright)
+        // Front hair - mostly UP with slight bend back
+        drawHairStroke(() => {
+          gameCtx.beginPath();
+          gameCtx.moveTo(centerX + 2, topOfHead + 1);
+          gameCtx.bezierCurveTo(
+            centerX + 1, topOfHead - 8,
+            centerX - 3, topOfHead - 9,
+            centerX - 6 + hairWiggle * 0.5, topOfHead - 7
+          );
+        });
+
+        // Back hair - starts farther back on head, shorter and more upright
+        drawHairStroke(() => {
+          gameCtx.beginPath();
+          gameCtx.moveTo(centerX - 2, topOfHead + 1);
+          gameCtx.bezierCurveTo(
+            centerX - 2, topOfHead - 5,
+            centerX - 4, topOfHead - 6,
+            centerX - 7 + hairWiggle * 0.4, topOfHead - 4
+          );
+        });
+      } else {
+        // Standing: mohawk spikes going straight up
+        drawHairStroke(() => {
+          gameCtx.beginPath();
+          gameCtx.moveTo(centerX + 1, topOfHead + 1);
+          gameCtx.quadraticCurveTo(centerX + 1, topOfHead - 5, centerX, topOfHead - 9);
+        });
+
+        drawHairStroke(() => {
+          gameCtx.beginPath();
+          gameCtx.moveTo(centerX - 2, topOfHead + 2);
+          gameCtx.quadraticCurveTo(centerX - 2, topOfHead - 2, centerX - 2, topOfHead - 5);
+        });
+      }
+
+      // Now draw head circle (on top of hair) with thin outline
+      // White outline first (outermost)
+      gameCtx.strokeStyle = '#fff';
+      gameCtx.lineWidth = 3.6;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      gameCtx.stroke();
+      // Thin black outline inside white
+      gameCtx.strokeStyle = '#000';
+      gameCtx.lineWidth = 3.3;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      gameCtx.stroke();
+      // Main color (innermost)
+      gameCtx.strokeStyle = playerColor;
+      gameCtx.lineWidth = 3;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      gameCtx.stroke();
+
+      // Draw Smudgy face (pink circle with transparent cutout)
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, eyeLookDirection, player.vy, player.onGround, playerColor);
     } else {
+      // Head circle for non-smudgy style
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      gameCtx.stroke();
+
       // Hair - marker tip style (scaled 75%)
       gameCtx.fillStyle = playerColor;
       gameCtx.beginPath();
@@ -2646,7 +3038,24 @@ function drawPlayer(): void {
       }
     }
 
-    // Stick body
+    // Stick body with thin outline
+    // White outline first (outermost)
+    gameCtx.strokeStyle = '#fff';
+    gameCtx.lineWidth = 3.6;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyStartY);
+    gameCtx.lineTo(centerX, bodyEndY);
+    gameCtx.stroke();
+    // Thin black outline inside
+    gameCtx.strokeStyle = '#000';
+    gameCtx.lineWidth = 3.3;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyStartY);
+    gameCtx.lineTo(centerX, bodyEndY);
+    gameCtx.stroke();
+    // Main color (innermost)
+    gameCtx.strokeStyle = playerColor;
+    gameCtx.lineWidth = 3;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyStartY);
     gameCtx.lineTo(centerX, bodyEndY);
@@ -2655,82 +3064,206 @@ function drawPlayer(): void {
 
   // Animation
   const walkCycle = Math.sin(player.animFrame * Math.PI);
-  const armSwing = walkCycle * 0.5;
-  const legSwing = walkCycle * 0.6;
+  const isWalking = Math.abs(player.vx) > 0.5;
+  // Body stays in walking pose until face finishes turning
+  const bodyStillWalking = isWalking || stoppingTimer < BODY_RESET_DELAY;
 
   // Wave animation for idle
   const waveAngle = isWaving ? Math.sin(waveFrame * 3) * 0.5 : 0;
 
-  // Left arm (waves when idle)
-  gameCtx.beginPath();
-  gameCtx.moveTo(centerX, bodyStartY + 4);
+  // Helper to draw an L-shaped limb (90-degree angle at joint) with outlines
+  // angle: rotation angle of the whole limb around shoulder/hip
+  // The limb is an "L" shape: upper segment goes out, lower segment goes down
+  const drawLLimb = (
+    startX: number, startY: number,
+    angle: number, // Rotation angle (0 = arm pointing down-forward)
+    upperLen: number, lowerLen: number,
+    isLeft: boolean // Left side limbs bend outward to the left
+  ) => {
+    // Upper segment direction based on angle
+    const upperAngle = angle;
+    const elbowX = startX + Math.sin(upperAngle) * upperLen * (isLeft ? -1 : 1);
+    const elbowY = startY + Math.cos(upperAngle) * upperLen;
+
+    // Lower segment always goes more downward (90-degree-ish from upper)
+    const lowerAngle = upperAngle + (isLeft ? -1.2 : 1.2); // Bend at elbow/knee
+    const endX = elbowX + Math.sin(lowerAngle) * lowerLen * (isLeft ? -1 : 1);
+    const endY = elbowY + Math.cos(lowerAngle) * lowerLen;
+
+    // White outline first (outermost)
+    gameCtx.strokeStyle = '#fff';
+    gameCtx.lineWidth = 3.6;
+    gameCtx.beginPath();
+    gameCtx.moveTo(startX, startY);
+    gameCtx.lineTo(elbowX, elbowY);
+    gameCtx.lineTo(endX, endY);
+    gameCtx.stroke();
+    // Thin black outline inside
+    gameCtx.strokeStyle = '#000';
+    gameCtx.lineWidth = 3.3;
+    gameCtx.beginPath();
+    gameCtx.moveTo(startX, startY);
+    gameCtx.lineTo(elbowX, elbowY);
+    gameCtx.lineTo(endX, endY);
+    gameCtx.stroke();
+    // Main color (innermost)
+    gameCtx.strokeStyle = playerColor;
+    gameCtx.lineWidth = 3;
+    gameCtx.beginPath();
+    gameCtx.moveTo(startX, startY);
+    gameCtx.lineTo(elbowX, elbowY);
+    gameCtx.lineTo(endX, endY);
+    gameCtx.stroke();
+  };
+
+  const shoulderY = bodyStartY + 4;
+  const hipY = bodyEndY;
+  const upperArm = 6;
+  const forearm = 6;
+  const thigh = 6;
+  const calf = 7;
+
+  // Arms - body waits for face to turn before switching to standing pose
   if (isWaving) {
-    // Waving arm - raised up and waving
-    const waveX = centerX - limbLength * Math.cos(-0.8 + waveAngle);
-    const waveY = bodyStartY + 4 + limbLength * Math.sin(-0.8 + waveAngle);
-    gameCtx.lineTo(waveX, waveY);
+    // Waving arm - raised up, swinging
+    const waveSwing = Math.sin(waveFrame * 4) * 0.4;
+    drawLLimb(centerX, shoulderY, -1.5 + waveSwing, upperArm, forearm, true);
+    // Other arm relaxed
+    drawLLimb(centerX, shoulderY, 0.3, upperArm, forearm, false);
+  } else if (bodyStillWalking) {
+    // Running (or still transitioning from running): arms pump with big swings
+    // Use decaying swing when stopping
+    const swingAmount = isWalking ? walkCycle * 1.2 : walkCycle * 1.2 * (1 - stoppingTimer / BODY_RESET_DELAY);
+    drawLLimb(centerX, shoulderY, -swingAmount, upperArm, forearm, true);
+    drawLLimb(centerX, shoulderY, swingAmount, upperArm, forearm, false);
   } else {
-    gameCtx.lineTo(
-      centerX - limbLength * Math.cos(0.6 + armSwing),
-      bodyStartY + 4 + limbLength * Math.sin(0.6 + armSwing)
-    );
+    if (isGirlMode) {
+      // Girl standing: arms stick straight out to the sides (looks better with dress)
+      // Left arm with outline (white outside, thin black inside)
+      gameCtx.strokeStyle = '#fff';
+      gameCtx.lineWidth = 3.6;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      gameCtx.strokeStyle = '#000';
+      gameCtx.lineWidth = 3.3;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      gameCtx.strokeStyle = playerColor;
+      gameCtx.lineWidth = 3;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      // Right arm with outline (white outside, thin black inside)
+      gameCtx.strokeStyle = '#fff';
+      gameCtx.lineWidth = 3.6;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      gameCtx.strokeStyle = '#000';
+      gameCtx.lineWidth = 3.3;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      gameCtx.strokeStyle = playerColor;
+      gameCtx.lineWidth = 3;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.stroke();
+    } else {
+      // Boy standing: arms out to the sides (same as girl, looks better)
+      // Left arm (white outside, thin black inside)
+      gameCtx.strokeStyle = '#fff';
+      gameCtx.lineWidth = 3.6;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      gameCtx.strokeStyle = '#000';
+      gameCtx.lineWidth = 3.3;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      gameCtx.strokeStyle = playerColor;
+      gameCtx.lineWidth = 3;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      // Right arm (white outside, thin black inside)
+      gameCtx.strokeStyle = '#fff';
+      gameCtx.lineWidth = 3.6;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      gameCtx.strokeStyle = '#000';
+      gameCtx.lineWidth = 3.3;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.stroke();
+      gameCtx.strokeStyle = playerColor;
+      gameCtx.lineWidth = 3;
+      gameCtx.beginPath();
+      gameCtx.moveTo(centerX, shoulderY);
+      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.stroke();
+    }
   }
-  gameCtx.stroke();
 
-  // Right arm
-  gameCtx.beginPath();
-  gameCtx.moveTo(centerX, bodyStartY + 4);
-  gameCtx.lineTo(
-    centerX + limbLength * Math.cos(0.6 - armSwing),
-    bodyStartY + 4 + limbLength * Math.sin(0.6 - armSwing)
-  );
-  gameCtx.stroke();
+  // Helper to draw a line with outlines (white outside, thin black inside)
+  const drawLineWithOutline = (x1: number, y1: number, x2: number, y2: number) => {
+    // White outline (outermost)
+    gameCtx.strokeStyle = '#fff';
+    gameCtx.lineWidth = 3.6;
+    gameCtx.beginPath();
+    gameCtx.moveTo(x1, y1);
+    gameCtx.lineTo(x2, y2);
+    gameCtx.stroke();
+    // Thin black outline inside
+    gameCtx.strokeStyle = '#000';
+    gameCtx.lineWidth = 3.3;
+    gameCtx.beginPath();
+    gameCtx.moveTo(x1, y1);
+    gameCtx.lineTo(x2, y2);
+    gameCtx.stroke();
+    // Main color (innermost)
+    gameCtx.strokeStyle = playerColor;
+    gameCtx.lineWidth = 3;
+    gameCtx.beginPath();
+    gameCtx.moveTo(x1, y1);
+    gameCtx.lineTo(x2, y2);
+    gameCtx.stroke();
+  };
 
-  // Legs (scaled 75%)
+  // Legs - simple wiggly sticks with outlines
+  const legSwing = isWalking ? Math.sin(player.animFrame * Math.PI) * 8 : 0;
+
   if (!player.onGround && player.vy < 0) {
-    // Jumping up - legs tucked
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX - 5, bodyEndY + limbLength * 0.7);
-    gameCtx.stroke();
-
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX + 5, bodyEndY + limbLength * 0.7);
-    gameCtx.stroke();
+    // Jumping up - legs tucked together
+    drawLineWithOutline(centerX, hipY, centerX - 3, hipY + limbLength * 0.7);
+    drawLineWithOutline(centerX, hipY, centerX + 3, hipY + limbLength * 0.7);
   } else if (!player.onGround) {
     // Falling - legs spread
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX - 8, bodyEndY + limbLength);
-    gameCtx.stroke();
-
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(centerX + 8, bodyEndY + limbLength);
-    gameCtx.stroke();
+    drawLineWithOutline(centerX, hipY, centerX - 7, hipY + limbLength);
+    drawLineWithOutline(centerX, hipY, centerX + 7, hipY + limbLength);
+  } else if (isWalking) {
+    // Running: simple wiggly legs
+    drawLineWithOutline(centerX, hipY, centerX - 4 + legSwing, hipY + limbLength);
+    drawLineWithOutline(centerX, hipY, centerX + 4 - legSwing, hipY + limbLength);
   } else {
-    // Walking/standing - always show both legs spread
-    const isWalking = Math.abs(player.vx) > 0.5;
-    const legSpread = isWalking ? legSwing * 0.8 : 0.3; // Base spread when standing
-
-    // Left leg
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(
-      centerX - limbLength * (isWalking ? Math.sin(legSwing) * 0.8 : 0.3),
-      bodyEndY + limbLength * (isWalking ? Math.cos(legSwing * 0.5) : 0.95)
-    );
-    gameCtx.stroke();
-
-    // Right leg
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyEndY);
-    gameCtx.lineTo(
-      centerX + limbLength * (isWalking ? Math.sin(legSwing) * 0.8 : 0.3),
-      bodyEndY + limbLength * (isWalking ? Math.cos(legSwing * 0.5) : 0.95)
-    );
-    gameCtx.stroke();
+    // Standing: legs straight down, slight spread
+    drawLineWithOutline(centerX, hipY, centerX - 4, hipY + limbLength);
+    drawLineWithOutline(centerX, hipY, centerX + 4, hipY + limbLength);
   }
 
   // Draw accessories on top
@@ -3169,6 +3702,7 @@ function drawHUD(): void {
 
   // Notification popup (bottom left)
   drawNotification();
+  drawCenteredPopup();
   drawNTBFlash();
 
   // Countdown overlay (on overlay canvas so it's above foreground)
@@ -3230,6 +3764,54 @@ function drawNotification(): void {
   }
 
   overlayCtx.textAlign = 'left';
+}
+
+/**
+ * Draw centered popup (for onboarding controls hint)
+ */
+function drawCenteredPopup(): void {
+  if (!overlayCtx || !centeredPopup) return;
+
+  const now = performance.now();
+  if (now > centeredPopup.endTime) {
+    centeredPopup = null;
+    return;
+  }
+
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const centerX = scrollX + window.innerWidth / 2;
+  const centerY = scrollY + window.innerHeight / 2;
+
+  // Calculate alpha for fade in/out (quick fade in, hold, quick fade out)
+  const duration = centeredPopup.endTime - centeredPopup.startTime;
+  const elapsed = now - centeredPopup.startTime;
+  const progress = elapsed / duration;
+
+  let alpha = 1;
+  if (progress < 0.1) {
+    alpha = progress / 0.1; // Fade in first 10%
+  } else if (progress > 0.8) {
+    alpha = (1 - progress) / 0.2; // Fade out last 20%
+  }
+
+  overlayCtx.save();
+  overlayCtx.globalAlpha = alpha;
+
+  // Draw large centered text with shadow
+  overlayCtx.font = 'bold 36px sans-serif';
+  overlayCtx.textAlign = 'center';
+  overlayCtx.textBaseline = 'middle';
+
+  // Shadow
+  overlayCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  overlayCtx.fillText(centeredPopup.text, centerX + 2, centerY + 2);
+
+  // Main text
+  overlayCtx.fillStyle = '#ffffff';
+  overlayCtx.fillText(centeredPopup.text, centerX, centerY);
+
+  overlayCtx.restore();
 }
 
 /**

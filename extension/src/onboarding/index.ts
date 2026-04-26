@@ -3,7 +3,50 @@
  * Smudgy runs onto the page and demonstrates the extension
  */
 
-import { openMenu, setModeExternal, getShadowRoot } from '@/ui';
+import { openMenu, getShadowRoot, getQuickExplorePosition } from '@/ui';
+import { addExternalStroke } from '@/canvas';
+
+/**
+ * Highlight the FAB button during onboarding
+ */
+function highlightFab(highlight: boolean): void {
+  const shadowRoot = getShadowRoot();
+  if (!shadowRoot) return;
+  const fab = shadowRoot.querySelector('.fab') as HTMLElement;
+  if (fab) {
+    if (highlight) {
+      fab.style.background = '#22c55e'; // Green
+    } else {
+      fab.style.background = ''; // Reset to default
+    }
+  }
+}
+
+/**
+ * Highlight a mini button during onboarding (make it green/active)
+ */
+function highlightButton(index: number): void {
+  const shadowRoot = getShadowRoot();
+  if (!shadowRoot) return;
+  const minis = shadowRoot.querySelectorAll('.mini');
+  // Clear all highlights first
+  minis.forEach(m => m.classList.remove('active'));
+  // Highlight the specified button
+  if (minis[index]) {
+    minis[index].classList.add('active');
+  }
+}
+
+/**
+ * Clear all button highlights
+ */
+function clearButtonHighlights(): void {
+  const shadowRoot = getShadowRoot();
+  if (!shadowRoot) return;
+  const minis = shadowRoot.querySelectorAll('.mini');
+  minis.forEach(m => m.classList.remove('active'));
+  highlightFab(false);
+}
 
 // Storage keys
 const STORAGE_KEY = 'oo_onboarding_complete';
@@ -38,6 +81,7 @@ interface OnboardingState {
   isComplete: boolean;
   isSkipped: boolean;
   stepTimer: number;
+  eyeLookDirection: number; // -1 = left, 0 = center, 1 = right (smooth)
 }
 
 let state: OnboardingState = {
@@ -55,6 +99,7 @@ let state: OnboardingState = {
   isComplete: false,
   isSkipped: false,
   stepTimer: 0,
+  eyeLookDirection: 1, // Start looking right (entering from left)
 };
 
 let canvas: HTMLCanvasElement | null = null;
@@ -90,14 +135,14 @@ export function startOnboarding(): void {
   // Calculate ground position
   groundY = window.innerHeight - GROUND_Y_OFFSET;
 
-  // Reset state
+  // Reset state - start from top center, falling
   state = {
     step: 0,
-    smudgyX: -50,
-    smudgyY: groundY,
-    smudgyVx: SMUDGY_SPEED,
-    smudgyVy: 0,
-    onGround: true,
+    smudgyX: window.innerWidth / 2,
+    smudgyY: -50, // Start above viewport
+    smudgyVx: 0,
+    smudgyVy: 2, // Initial falling velocity
+    onGround: false,
     facingRight: true,
     animFrame: 0,
     speechBubble: null,
@@ -106,11 +151,29 @@ export function startOnboarding(): void {
     isComplete: false,
     isSkipped: false,
     stepTimer: 0,
+    eyeLookDirection: 0, // Start looking center
   };
+
+  // Reset self-draw line
+  selfDrawLine = [];
+  selfDrawProgress = 0;
+  fullLine = [];
 
   // Create overlay canvas
   createCanvas();
   createSkipButton();
+
+  // Listen for menu close to mark onboarding complete
+  const handleMenuClose = (): void => {
+    // Only mark complete if we've gotten past the intro (step > 0)
+    if (state.step > 0 && !state.isComplete && !state.isSkipped) {
+      console.log('[Smudgy] Menu closed - onboarding complete!');
+      localStorage.setItem(STORAGE_KEY, 'true');
+      cleanup();
+      window.removeEventListener('oo:menuClosed', handleMenuClose);
+    }
+  };
+  window.addEventListener('oo:menuClosed', handleMenuClose);
 
   // Start animation loop
   lastTime = performance.now();
@@ -130,7 +193,7 @@ function createCanvas(): void {
     width: 100vw;
     height: 100vh;
     pointer-events: none;
-    z-index: 2147483645;
+    z-index: 2147483648;
   `;
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
@@ -156,7 +219,7 @@ function createSkipButton(): void {
     font-size: 12px;
     border-radius: 20px;
     cursor: pointer;
-    z-index: 2147483646;
+    z-index: 2147483649;
     opacity: 0.7;
     transition: opacity 0.2s;
   `;
@@ -187,6 +250,7 @@ function cleanup(): void {
     skipButton.remove();
     skipButton = null;
   }
+  clearButtonHighlights();
   state.isComplete = true;
 }
 
@@ -238,6 +302,26 @@ function updateSmudgy(dt: number): void {
   if (state.smudgyVx > 0.5) state.facingRight = true;
   else if (state.smudgyVx < -0.5) state.facingRight = false;
 
+  // Update eye look direction (smooth turning)
+  const isMoving = Math.abs(state.smudgyVx) > 0.5;
+  if (isMoving) {
+    // When moving, eye looks FORWARD (always +1 in local coords)
+    // The context flip handles making it look correct on screen
+    state.eyeLookDirection = 1;
+  } else {
+    // When stopped, slowly turn eye toward center
+    // Start from the side we were facing (based on facingRight)
+    if (Math.abs(state.eyeLookDirection) === 1) {
+      // Just stopped - set initial direction based on which way we were running
+      state.eyeLookDirection = state.facingRight ? 1 : -1;
+    }
+    if (Math.abs(state.eyeLookDirection) > 0.1) {
+      state.eyeLookDirection *= 0.98; // Slow turn
+    } else {
+      state.eyeLookDirection = 0;
+    }
+  }
+
   // Update animation frame
   if (Math.abs(state.smudgyVx) > 0.5) {
     state.animFrame = (state.animFrame + 0.2 * dt) % 4;
@@ -282,7 +366,7 @@ function jump(): void {
 }
 
 /**
- * Get FAB button position
+ * Get FAB button position (3-dot menu)
  */
 function getFabPosition(): { x: number; y: number } {
   const shadowRoot = getShadowRoot();
@@ -299,104 +383,215 @@ function getFabPosition(): { x: number; y: number } {
 }
 
 /**
+ * Get mini button position by index (0=draw, 1=text, 2=game)
+ */
+function getMiniButtonPosition(index: number): { x: number; y: number } {
+  const shadowRoot = getShadowRoot();
+  if (!shadowRoot) return { x: window.innerWidth - 40, y: window.innerHeight - 100 - index * 50 };
+
+  const minis = shadowRoot.querySelectorAll('.mini');
+  if (!minis[index]) return { x: window.innerWidth - 40, y: window.innerHeight - 100 - index * 50 };
+
+  const rect = (minis[index] as HTMLElement).getBoundingClientRect();
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+  };
+}
+
+// Self-drawing line state
+let selfDrawLine: { x: number; y: number }[] = [];
+let selfDrawProgress = 0;
+let fullLine: { x: number; y: number }[] = []; // The complete line path
+
+/**
  * Update onboarding step logic
+ * Sequence:
+ * 0: Fall from top, land in bottom center
+ * 1: Wave hello, say "hi! i'm smudgy!"
+ * 2: Run to FAB and jump toward it
+ * 3: Land on FAB
+ * 4: Jump to draw button
+ * 5: Land on draw button, say "draw here!", start line drawing
+ * 6: Line draws across screen, then jump to quick explore
+ * 7: Land on quick explore button, say "play here!", activate game mode
+ * 8: Wait for speech to finish
+ * 9: Say "wasd to move!"
+ * 10: Wait, then complete onboarding
  */
 function updateStep(dt: number): void {
   state.stepTimer += dt * 16.67;
 
   const fabPos = getFabPosition();
-  const targetX = fabPos.x - 60; // Stand to the left of FAB
+  const drawBtnPos = getMiniButtonPosition(0);
+  const centerX = window.innerWidth / 2;
 
   switch (state.step) {
-    case 0: // Run in from left toward FAB
-      if (state.smudgyX < targetX) {
-        state.smudgyVx = SMUDGY_SPEED;
-      } else {
+    case 0: // Fall from top, land in bottom center
+      // Gravity is applied in updateSmudgy, just wait to land
+      if (state.onGround && state.stepTimer > 500) {
         state.smudgyVx = 0;
-        state.smudgyX = targetX;
         state.step = 1;
         state.stepTimer = 0;
-        showSpeech("hi! i'm smudgy");
+        showSpeech("hi! i'm smudgy!");
       }
       break;
 
-    case 1: // Wait for speech, then jump to FAB
+    case 1: // Wave hello, then run to FAB
       if (state.stepTimer > SPEECH_DURATION) {
         state.step = 2;
         state.stepTimer = 0;
-        jump();
-        state.smudgyVx = 2; // Move toward FAB while jumping
+        state.smudgyVx = SMUDGY_SPEED; // Run right toward FAB
       }
       break;
 
-    case 2: // Land near FAB, open menu
-      if (state.onGround && state.stepTimer > 500) {
+    case 2: // Run to FAB and jump toward it
+      if (state.smudgyX >= fabPos.x - 50) {
         state.smudgyVx = 0;
-        openMenu();
+        state.smudgyVy = JUMP_FORCE;
+        state.onGround = false;
         state.step = 3;
         state.stepTimer = 0;
-        showSpeech("let's draw!");
+        // Open menu while jumping
+        setTimeout(() => openMenu(), 300);
       }
       break;
 
-    case 3: // Wait, then activate draw mode
-      if (state.stepTimer > SPEECH_DURATION) {
-        setModeExternal('draw');
+    case 3: // In air, moving toward FAB - land on it
+      // Keep moving toward FAB
+      if (state.smudgyX < fabPos.x) {
+        state.smudgyVx = 2;
+      }
+      // When falling and near FAB position, land on it
+      if (state.smudgyVy > 0 && state.stepTimer > 200) {
+        // Land on FAB - position so feet are on top of the FAB button
+        // FAB center is at fabPos.y, button radius is ~28px, so top is at fabPos.y - 28
+        // Smudgy height is ~38, so smudgyY should be fabPos.y - 28 - 38 = fabPos.y - 66
+        state.smudgyX = fabPos.x;
+        state.smudgyY = fabPos.y - 55; // Stand on top of FAB
+        state.smudgyVx = 0;
+        state.smudgyVy = 0;
+        state.onGround = true;
         state.step = 4;
         state.stepTimer = 0;
-        // Start running left while "drawing"
-        state.smudgyVx = -SMUDGY_SPEED;
-        state.drawnLine = [{ x: state.smudgyX, y: state.smudgyY }];
+        // Highlight the FAB green
+        highlightFab(true);
       }
       break;
 
-    case 4: // Run across screen drawing a line
-      // Add points to the drawn line
-      state.drawnLine.push({ x: state.smudgyX, y: state.smudgyY });
-
-      if (state.smudgyX < 100) {
-        state.smudgyVx = 0;
+    case 4: // On FAB, wait a second (showing green) then jump to draw button
+      if (state.stepTimer > 1000) {
+        // Clear FAB highlight before jumping
+        highlightFab(false);
+        // Jump up toward draw button
+        state.smudgyVy = JUMP_FORCE * 0.8;
+        state.onGround = false;
         state.step = 5;
         state.stepTimer = 0;
-        // Jump up
-        jump();
       }
       break;
 
-    case 5: // Jump off edge, then fall and land on the line
-      // Move back right
-      state.smudgyVx = SMUDGY_SPEED;
+    case 5: // Jumping to draw button
+      // Move toward draw button while in air
+      const dxDraw = drawBtnPos.x - state.smudgyX;
+      if (Math.abs(dxDraw) > 5) {
+        state.smudgyVx = dxDraw * 0.1;
+      }
 
-      // Check if we should land on our drawn line
-      if (state.smudgyY >= groundY - 10 && state.smudgyVy > 0) {
-        // Land on line
-        state.onGround = true;
+      // When falling and past peak, land on draw button
+      if (state.smudgyVy > 0 && state.stepTimer > 200) {
+        // Land on draw button
+        state.smudgyX = drawBtnPos.x;
+        state.smudgyY = drawBtnPos.y - 25;
+        state.smudgyVx = 0;
         state.smudgyVy = 0;
+        state.onGround = true;
         state.step = 6;
         state.stepTimer = 0;
-        showSpeech("draw platforms!");
+        showSpeech("draw here!");
+        // Highlight the draw button (index 0)
+        highlightButton(0);
+
+        // Build the full line path upfront (from left side to near FAB)
+        selfDrawProgress = 0;
+        selfDrawLine = [];
+        fullLine = [];
+        const lineStartX = 80;
+        const lineEndX = fabPos.x - 60;
+        const numPoints = 50; // Smooth line with many points
+        for (let i = 0; i <= numPoints; i++) {
+          fullLine.push({
+            x: lineStartX + (lineEndX - lineStartX) * (i / numPoints),
+            y: groundY
+          });
+        }
       }
       break;
 
-    case 6: // Walk on the line back to center
-      if (state.smudgyX > window.innerWidth / 2) {
-        state.smudgyVx = 0;
+    case 6: // On draw button, line draws itself, then jump to quick explore
+      // Animate the self-drawing line (slower so it's visible)
+      selfDrawProgress += dt * 0.025; // ~2.5 seconds to draw fully
+
+      // Show portion of the line based on progress
+      const pointsToShow = Math.floor(fullLine.length * Math.min(selfDrawProgress, 1));
+      selfDrawLine = fullLine.slice(0, pointsToShow + 1);
+
+      if (state.stepTimer > SPEECH_DURATION && selfDrawProgress >= 1) {
+        // Add the line to the real canvas so game Smudgy can land on it
+        if (fullLine.length > 1) {
+          addExternalStroke(fullLine, PINK, 4);
+        }
+        // Jump toward quick explore button
+        state.smudgyVy = JUMP_FORCE * 0.6;
+        state.onGround = false;
         state.step = 7;
         state.stepTimer = 0;
       }
       break;
 
-    case 7: // Pause, then wave goodbye
-      if (state.stepTimer > 1000) {
-        showSpeech("your turn!");
+    case 7: // Jumping to quick explore button
+      const quickExplorePos = getQuickExplorePosition();
+      const targetX = quickExplorePos ? quickExplorePos.x : fabPos.x;
+      const targetY = quickExplorePos ? quickExplorePos.y : fabPos.y - 20;
+
+      // Move toward quick explore button while in air
+      const dxQuick = targetX - state.smudgyX;
+      if (Math.abs(dxQuick) > 5) {
+        state.smudgyVx = dxQuick * 0.08;
+      }
+
+      // When falling and past peak, land on quick explore button
+      if (state.smudgyVy > 0 && state.stepTimer > 200) {
+        // Land on quick explore button
+        state.smudgyX = targetX;
+        state.smudgyY = targetY - 20;
+        state.smudgyVx = 0;
+        state.smudgyVy = 0;
+        state.onGround = true;
         state.step = 8;
         state.stepTimer = 0;
+        showSpeech("explore with me!");
+
+        // Start game mode - player will fall from sky above the drawn line
+        // Calculate spawn position above the middle of the line
+        const lineMiddleX = fullLine.length > 0 ? fullLine[Math.floor(fullLine.length / 2)].x : window.innerWidth / 2;
+        document.dispatchEvent(new CustomEvent('oo:gamemode', {
+          detail: {
+            mode: 'play',
+            playmode: 'explore',
+            // Spawn above the line so player falls onto it
+            spawnPos: { x: lineMiddleX, y: -50 },
+            fromOnboarding: true // Flag to show controls hint
+          }
+        }));
       }
       break;
 
-    case 8: // Wave animation, then fade out
+    case 8: // On quick explore button, wait for game Smudgy to fall and land
+      // Wait for speech + time for game Smudgy to fall (~1.5 sec)
       if (state.stepTimer > SPEECH_DURATION + 1000) {
-        // Mark complete
+        // Game Smudgy should have landed by now - cleanup onboarding Smudgy
+        // Mark complete and hide onboarding (game Smudgy takes over)
         localStorage.setItem(STORAGE_KEY, 'true');
         cleanup();
       }
@@ -413,17 +608,17 @@ function render(): void {
   // Clear canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Draw the demo line (what Smudgy "drew")
-  if (state.drawnLine.length > 1) {
+  // Draw the self-drawing ground line (from draw button demo)
+  if (selfDrawLine.length > 1) {
     ctx.save();
     ctx.strokeStyle = PINK;
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
-    ctx.moveTo(state.drawnLine[0].x, state.drawnLine[0].y);
-    for (let i = 1; i < state.drawnLine.length; i++) {
-      ctx.lineTo(state.drawnLine[i].x, state.drawnLine[i].y);
+    ctx.moveTo(selfDrawLine[0].x, selfDrawLine[0].y);
+    for (let i = 1; i < selfDrawLine.length; i++) {
+      ctx.lineTo(selfDrawLine[i].x, selfDrawLine[i].y);
     }
     ctx.stroke();
     ctx.restore();
@@ -432,8 +627,8 @@ function render(): void {
   // Draw motion lines
   drawMotionLines();
 
-  // Draw Smudgy
-  drawSmudgy(state.smudgyX, state.smudgyY, state.facingRight, state.animFrame, state.step === 8);
+  // Draw Smudgy (wave during step 1 - hello wave)
+  drawSmudgy(state.smudgyX, state.smudgyY, state.facingRight, state.animFrame, state.step === 1);
 
   // Draw speech bubble
   if (state.speechBubble) {
@@ -473,8 +668,9 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
 
   ctx.save();
 
-  // Flip if facing left
-  if (!facingRight) {
+  // Only flip if actually moving left - face forward when stopped
+  const isMoving = Math.abs(state.smudgyVx) > 0.5;
+  if (isMoving && !facingRight) {
     ctx.translate(x, 0);
     ctx.scale(-1, 1);
     ctx.translate(-x, 0);
@@ -501,45 +697,101 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
   ctx.shadowOffsetX = 2;
   ctx.shadowOffsetY = 2;
 
-  const isMoving = Math.abs(state.smudgyVx) > 0.5;
+  const topOfHead = headY - headRadius;
+  const hairWiggle = Math.sin(state.animFrame * Math.PI * 2) * 2;
 
-  // Head circle (white outline)
+  // Draw hair FIRST (behind the head)
+  ctx.strokeStyle = WHITE;
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+
+  if (isMoving) {
+    // Running: hairs stick up high then curve back slightly (shorter, more upright)
+    // Front hair - mostly UP with slight bend back
+    ctx.beginPath();
+    ctx.moveTo(centerX + 2, topOfHead + 1);
+    ctx.bezierCurveTo(
+      centerX + 1, topOfHead - 8,     // Go UP high
+      centerX - 3, topOfHead - 9,     // Slight curve back at top
+      centerX - 6 + hairWiggle * 0.5, topOfHead - 7  // End point - shorter, higher
+    );
+    ctx.stroke();
+
+    // Back hair - shorter and more upright
+    ctx.beginPath();
+    ctx.moveTo(centerX - 2, topOfHead + 1);
+    ctx.bezierCurveTo(
+      centerX - 2, topOfHead - 5,     // Go UP high
+      centerX - 4, topOfHead - 6,     // Slight curve back
+      centerX - 7 + hairWiggle * 0.4, topOfHead - 4  // End point - shorter, higher
+    );
+    ctx.stroke();
+  } else {
+    // Standing: mohawk spikes going straight up from top of head
+    ctx.beginPath();
+    ctx.moveTo(centerX + 1, topOfHead + 1);
+    ctx.quadraticCurveTo(centerX + 1, topOfHead - 5, centerX, topOfHead - 9);
+    ctx.stroke();
+
+    // Back spike (shorter)
+    ctx.beginPath();
+    ctx.moveTo(centerX - 2, topOfHead + 2);
+    ctx.quadraticCurveTo(centerX - 2, topOfHead - 2, centerX - 2, topOfHead - 5);
+    ctx.stroke();
+  }
+
+  // Now draw head circle (on top of hair)
+  ctx.strokeStyle = WHITE;
+  ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Fill head with white first
-  ctx.fillStyle = WHITE;
-  ctx.fill();
+  // Turn off shadow for the pink fill (no pink glow)
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
 
   // Pink circle - almost fills head
   ctx.fillStyle = PINK;
   ctx.beginPath();
-  ctx.arc(centerX + 1, headY, headRadius - 2, 0, Math.PI * 2);
+  ctx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
   ctx.fill();
 
-  // White intrusion (creates crescent) - position based on movement
-  // Default: slightly down and forward (looking where going)
-  let eyeOffsetX = headRadius - 3;  // Forward
-  let eyeOffsetY = 2;  // Slightly down
+  // Eye cutout position - use signed lookDir so eye is on correct side when stopped
+  // Negative lookDir = eye on left, positive = eye on right
+  const maxOffset = headRadius - 3;
+  let eyeOffsetX = state.eyeLookDirection * maxOffset; // Signed value!
 
-  if (!state.onGround && state.smudgyVy < -2) {
-    // Jumping up - look up
-    eyeOffsetY = -3;
-    if (state.smudgyVx > 1) {
-      eyeOffsetX = headRadius - 2;  // Up-right
-    } else if (state.smudgyVx < -1) {
-      eyeOffsetX = headRadius - 2;  // Still forward (will flip with character)
+  // Vertical offset - look UP when jumping (almost straight up with slight angle)
+  let eyeOffsetY = 0;
+  let jumpingEyeXReduction = 1;
+  if (!state.onGround) {
+    if (state.smudgyVy < -2) {
+      eyeOffsetY = -4; // Looking up high while jumping
+      jumpingEyeXReduction = 0.3; // Move eye more toward center when looking up
+    } else if (state.smudgyVy > 2) {
+      eyeOffsetY = 1; // Slight look down when falling
     }
-  } else if (!state.onGround && state.smudgyVy > 2) {
-    // Falling - look down
-    eyeOffsetY = 4;
+  } else if (Math.abs(state.eyeLookDirection) > 0.3) {
+    eyeOffsetY = 1; // Slightly down when looking to the side
   }
 
-  ctx.fillStyle = WHITE;
+  const cutoutRadius = headRadius - 4;
+
+  // Cut out the eye hole using destination-out (transparent hole)
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
   ctx.beginPath();
-  ctx.arc(centerX + eyeOffsetX, headY + eyeOffsetY, headRadius - 4, 0, Math.PI * 2);
+  ctx.arc(centerX + eyeOffsetX * jumpingEyeXReduction, headY + eyeOffsetY, cutoutRadius, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
+
+  // Redraw head outline ON TOP so it covers any cutout bleeding past the edge
+  ctx.strokeStyle = WHITE;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+  ctx.stroke();
 
   // Stick body
   ctx.beginPath();
@@ -549,79 +801,85 @@ function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: numbe
 
   // Animation
   const walkCycle = Math.sin(animFrame * Math.PI);
-  const armSwing = walkCycle * 0.5;
-  const legSwing = walkCycle * 0.6;
+  const isWalking = isMoving;
 
   // Wave animation
   const waveAngle = waving ? Math.sin(animFrame * 3) * 0.5 : 0;
 
-  // Left arm (waves when waving)
-  ctx.beginPath();
-  ctx.moveTo(centerX, bodyStartY + 4);
+  // Helper to draw an L-shaped limb (90-degree angle at joint)
+  const drawLLimb = (
+    startX: number, startY: number,
+    angle: number,
+    upperLen: number, lowerLen: number,
+    isLeft: boolean
+  ) => {
+    const elbowX = startX + Math.sin(angle) * upperLen * (isLeft ? -1 : 1);
+    const elbowY = startY + Math.cos(angle) * upperLen;
+    const lowerAngle = angle + (isLeft ? -1.2 : 1.2);
+    const endX = elbowX + Math.sin(lowerAngle) * lowerLen * (isLeft ? -1 : 1);
+    const endY = elbowY + Math.cos(lowerAngle) * lowerLen;
+
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(elbowX, elbowY);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+  };
+
+  const shoulderY = bodyStartY + 4;
+  const hipY = bodyEndY;
+  const upperArm = 6;
+  const forearm = 6;
+  const thigh = 6;
+  const calf = 7;
+
+  // Arms
   if (waving) {
-    const waveX = centerX - limbLength * Math.cos(-0.8 + waveAngle);
-    const waveY = bodyStartY + 4 + limbLength * Math.sin(-0.8 + waveAngle);
-    ctx.lineTo(waveX, waveY);
+    const waveSwing = Math.sin(animFrame * 4) * 0.4;
+    drawLLimb(centerX, shoulderY, -1.5 + waveSwing, upperArm, forearm, true);
+    drawLLimb(centerX, shoulderY, 0.3, upperArm, forearm, false);
+  } else if (isWalking) {
+    const armSwing = walkCycle * 0.8;
+    drawLLimb(centerX, shoulderY, -armSwing * 0.6, upperArm, forearm, true);
+    drawLLimb(centerX, shoulderY, armSwing * 0.6, upperArm, forearm, false);
   } else {
-    ctx.lineTo(
-      centerX - limbLength * Math.cos(0.6 + armSwing),
-      bodyStartY + 4 + limbLength * Math.sin(0.6 + armSwing)
-    );
+    // Standing: arms pointing mostly downward
+    drawLLimb(centerX, shoulderY, 0.1, upperArm, forearm, true);
+    drawLLimb(centerX, shoulderY, 0.1, upperArm, forearm, false);
   }
-  ctx.stroke();
 
-  // Right arm
-  ctx.beginPath();
-  ctx.moveTo(centerX, bodyStartY + 4);
-  ctx.lineTo(
-    centerX + limbLength * Math.cos(0.6 - armSwing),
-    bodyStartY + 4 + limbLength * Math.sin(0.6 - armSwing)
-  );
-  ctx.stroke();
+  // Legs - simple wiggly sticks
+  const legSwing = isWalking ? Math.sin(animFrame * Math.PI) * 8 : 0;
 
-  // Legs
   if (!state.onGround && state.smudgyVy < 0) {
     // Jumping up - legs tucked
     ctx.beginPath();
-    ctx.moveTo(centerX, bodyEndY);
-    ctx.lineTo(centerX - 5, bodyEndY + limbLength * 0.7);
+    ctx.moveTo(centerX, hipY);
+    ctx.lineTo(centerX - 3, hipY + limbLength * 0.7);
     ctx.stroke();
-
     ctx.beginPath();
-    ctx.moveTo(centerX, bodyEndY);
-    ctx.lineTo(centerX + 5, bodyEndY + limbLength * 0.7);
+    ctx.moveTo(centerX, hipY);
+    ctx.lineTo(centerX + 3, hipY + limbLength * 0.7);
     ctx.stroke();
   } else if (!state.onGround) {
     // Falling - legs spread
     ctx.beginPath();
-    ctx.moveTo(centerX, bodyEndY);
-    ctx.lineTo(centerX - 8, bodyEndY + limbLength);
+    ctx.moveTo(centerX, hipY);
+    ctx.lineTo(centerX - 7, hipY + limbLength);
     ctx.stroke();
-
     ctx.beginPath();
-    ctx.moveTo(centerX, bodyEndY);
-    ctx.lineTo(centerX + 8, bodyEndY + limbLength);
+    ctx.moveTo(centerX, hipY);
+    ctx.lineTo(centerX + 7, hipY + limbLength);
     ctx.stroke();
   } else {
-    // Walking/standing
-    const isWalking = isMoving;
-
-    // Left leg
+    // Walking or standing - wiggly legs
     ctx.beginPath();
-    ctx.moveTo(centerX, bodyEndY);
-    ctx.lineTo(
-      centerX - limbLength * (isWalking ? Math.sin(legSwing) * 0.8 : 0.3),
-      bodyEndY + limbLength * (isWalking ? Math.cos(legSwing * 0.5) : 0.95)
-    );
+    ctx.moveTo(centerX, hipY);
+    ctx.lineTo(centerX - 4 + legSwing, hipY + limbLength);
     ctx.stroke();
-
-    // Right leg
     ctx.beginPath();
-    ctx.moveTo(centerX, bodyEndY);
-    ctx.lineTo(
-      centerX + limbLength * (isWalking ? Math.sin(legSwing) * 0.8 : 0.3),
-      bodyEndY + limbLength * (isWalking ? Math.cos(legSwing * 0.5) : 0.95)
-    );
+    ctx.moveTo(centerX, hipY);
+    ctx.lineTo(centerX + 4 - legSwing, hipY + limbLength);
     ctx.stroke();
   }
 
@@ -737,24 +995,24 @@ export function showReturningUserWave(): void {
     waveCtx.shadowOffsetX = 1;
     waveCtx.shadowOffsetY = 1;
 
-    // Head circle
+    // Head circle (outline only)
     waveCtx.beginPath();
     waveCtx.arc(40, 25, 8, 0, Math.PI * 2);
     waveCtx.stroke();
-    waveCtx.fillStyle = WHITE;
-    waveCtx.fill();
 
     // Pink circle - almost fills head
     waveCtx.fillStyle = PINK;
     waveCtx.beginPath();
-    waveCtx.arc(41, 25, 6, 0, Math.PI * 2);
+    waveCtx.arc(40, 25, 7, 0, Math.PI * 2);
     waveCtx.fill();
 
-    // White intrusion
-    waveCtx.fillStyle = WHITE;
+    // Cut out eye hole (transparent) - centered since standing still
+    waveCtx.save();
+    waveCtx.globalCompositeOperation = 'destination-out';
     waveCtx.beginPath();
-    waveCtx.arc(45, 25, 4, 0, Math.PI * 2);
+    waveCtx.arc(40, 25, 4, 0, Math.PI * 2);
     waveCtx.fill();
+    waveCtx.restore();
 
     // Body
     waveCtx.beginPath();

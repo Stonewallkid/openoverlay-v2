@@ -865,6 +865,17 @@ function showAnnotationForm(rect: DOMRect, selection: Selection): void {
   setTimeout(() => {
     (form.querySelector('textarea') as HTMLTextAreaElement)?.focus();
   }, 10);
+
+  // Handle Enter to save (Shift+Enter for line breaks)
+  const textarea = form.querySelector('textarea') as HTMLTextAreaElement;
+  textarea?.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // Prevent page keyboard shortcuts while typing
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const saveBtn = form.querySelector('.save-btn') as HTMLButtonElement;
+      saveBtn?.click();
+    }
+  });
 }
 
 function getNodeSelector(node: Node | null): string {

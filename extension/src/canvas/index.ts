@@ -67,6 +67,7 @@ interface ShapeItem {
   width: number;
   opacity: number;
   filled: boolean;
+  eraser?: boolean; // Whether this shape erases instead of draws
   layer?: 'normal' | 'background' | 'foreground'; // Layer for render order & collision
 }
 
@@ -902,6 +903,7 @@ function onPointerUp(): void {
       width: getSize(),
       opacity: getOpacity(),
       filled: shapeFilled,
+      eraser: getEraser(),
       layer: getLayer(),
     });
 
@@ -1091,6 +1093,7 @@ function drawShapeLive(): void {
   const width = getSize();
   const opacity = getOpacity();
   const filled = getShapeFilled();
+  const eraser = getEraser();
 
   ctx.save();
   ctx.globalAlpha = opacity;
@@ -1099,6 +1102,12 @@ function drawShapeLive(): void {
   ctx.lineWidth = width;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+
+  // Apply eraser mode
+  if (eraser) {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1;
+  }
 
   const x1 = shapeStart.x;
   const y1 = shapeStart.y;
@@ -1129,6 +1138,12 @@ function drawShapeSaved(shape: ShapeItem, rect: { x: number; y: number; width: n
   ctx.lineWidth = shape.width;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+
+  // Apply eraser mode
+  if (shape.eraser) {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1;
+  }
 
   drawShapeAtCoords(ctx, shape.shape, x1, y1, x2, y2, shape.filled);
 
@@ -2220,4 +2235,43 @@ export function checkPixelCollision(x: number, y: number, width: number, height:
 // Legacy function for compatibility - now returns empty since we use pixel collision
 export function getCollisionSurfaces(): { x: number; y: number; width: number; height: number }[] {
   return [];
+}
+
+/**
+ * Add a stroke externally (used by onboarding to add demo line)
+ */
+export function addExternalStroke(points: { x: number; y: number }[], color: string, width: number): void {
+  if (points.length < 2) return;
+
+  // Use body as anchor for external strokes
+  const body = document.body;
+  const rect = body.getBoundingClientRect();
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+
+  // Convert absolute points to relative (0-1 range based on body)
+  const relativePoints = points.map(p => ({
+    x: (p.x - scrollX) / rect.width,
+    y: (p.y - scrollY) / rect.height,
+  }));
+
+  items.push({
+    type: 'stroke',
+    anchorSelector: 'body',
+    points: relativePoints,
+    anchorBounds: {
+      x: scrollX,
+      y: scrollY,
+      width: rect.width,
+      height: rect.height,
+    },
+    color: color,
+    width: width,
+    opacity: 1,
+    brush: 'solid',
+    eraser: false,
+    layer: 'normal',
+  });
+
+  redraw();
 }

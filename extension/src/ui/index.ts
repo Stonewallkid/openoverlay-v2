@@ -149,6 +149,105 @@ const STYLES = `
     color: white;
   }
 
+  .quick-explore {
+    position: absolute;
+    bottom: -8px;
+    left: -8px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid white;
+    background: #ff69b4;
+    color: white;
+    font-size: 12px;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s, opacity 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+  }
+
+  .quick-explore:hover {
+    transform: scale(1.15);
+  }
+
+  .fab-container.open .quick-explore {
+    display: none;
+  }
+
+  .quick-visibility {
+    position: absolute;
+    bottom: -8px;
+    right: -8px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid white;
+    background: #3b82f6;
+    color: white;
+    font-size: 11px;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s, opacity 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+  }
+
+  .quick-visibility:hover {
+    transform: scale(1.15);
+  }
+
+  .quick-visibility.hidden {
+    background: #64748b;
+    opacity: 0.7;
+  }
+
+  .quick-visibility.hidden::after {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 2px;
+    background: #ef4444;
+    transform: rotate(-45deg);
+    border-radius: 1px;
+  }
+
+  .fab-container.open .quick-visibility {
+    display: none;
+  }
+
+  .dismiss-smudgy {
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid white;
+    background: #ef4444;
+    color: white;
+    font-size: 10px;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s, opacity 0.15s;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+  }
+
+  .dismiss-smudgy:hover {
+    transform: scale(1.15);
+  }
+
+  .dismiss-smudgy.show {
+    display: flex;
+  }
+
   .mini {
     width: 44px;
     height: 44px;
@@ -1407,6 +1506,76 @@ const STYLES = `
     transform: translateX(14px);
   }
 
+  .char-toggle-profile {
+    display: flex;
+    gap: 4px;
+  }
+
+  .char-btn-profile {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: 2px solid #333;
+    background: #222;
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .char-btn-profile:hover {
+    border-color: #555;
+  }
+
+  .char-btn-profile.active {
+    border-color: #22c55e;
+    background: #22c55e22;
+  }
+
+  .profile-color-picker {
+    display: flex;
+    align-items: center;
+  }
+
+  .profile-color-swatches {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .profile-color-swatch {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid #333;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .profile-color-swatch:hover {
+    transform: scale(1.1);
+    border-color: #555;
+  }
+
+  .profile-color-swatch.active {
+    border-color: #fff;
+    box-shadow: 0 0 0 2px #22c55e;
+  }
+
+  .profile-select {
+    background: #222;
+    color: #fff;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .profile-select:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+
   .profile-bookmarks {
     padding: 12px 20px;
     border-bottom: 1px solid #333;
@@ -1597,6 +1766,90 @@ export function initUI(): void {
   };
   container.appendChild(fab);
 
+  // Quick explore button - drops Smudgy without opening menu (toggle on/off)
+  const quickExplore = document.createElement('button');
+  quickExplore.className = 'quick-explore';
+  quickExplore.textContent = '🏃';
+  quickExplore.title = 'Quick drop Smudgy';
+  let isExploring = false;
+  quickExplore.onclick = (e) => {
+    e.stopPropagation();
+    if (!isExploring) {
+      // Start exploring - drop Smudgy without opening menu
+      isExploring = true;
+      currentMode = 'game';
+      quickExplore.style.background = '#22c55e'; // Green when active
+      document.dispatchEvent(new CustomEvent('oo:gamemode', { detail: { mode: 'play', playmode: 'explore' } }));
+    } else {
+      // Stop exploring - dismiss Smudgy
+      isExploring = false;
+      currentMode = 'none';
+      quickExplore.style.background = '#ff69b4'; // Back to pink
+      document.dispatchEvent(new CustomEvent('oo:gamemode', { detail: { mode: 'none' } }));
+    }
+  };
+  // Listen for game mode ending from other sources (like toolbar X)
+  document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
+    if (e.detail.mode === 'none') {
+      isExploring = false;
+      quickExplore.style.background = '#ff69b4';
+    } else if (e.detail.mode === 'play' && e.detail.playmode === 'explore') {
+      isExploring = true;
+      quickExplore.style.background = '#22c55e';
+    }
+  }) as EventListener);
+  container.appendChild(quickExplore);
+
+  // Quick visibility toggle - hide/show all drawings (eye icon with slash when hidden)
+  const quickVisibility = document.createElement('button');
+  quickVisibility.className = 'quick-visibility';
+  quickVisibility.innerHTML = '👁';
+  quickVisibility.title = 'Hide drawings';
+  let drawingsVisible = true;
+  const updateVisibilityIcon = () => {
+    quickVisibility.classList.toggle('hidden', !drawingsVisible);
+    quickVisibility.title = drawingsVisible ? 'Hide drawings' : 'Show drawings';
+  };
+  quickVisibility.onclick = (e) => {
+    e.stopPropagation();
+    drawingsVisible = !drawingsVisible;
+    updateVisibilityIcon();
+    // Update visibilityState and dispatch event (same as profile toggle)
+    visibilityState.showAll = drawingsVisible;
+    // Also update the toggle in profile if visible
+    shadowRoot?.querySelector('#toggle-all-drawings')?.classList.toggle('active', drawingsVisible);
+    document.dispatchEvent(new CustomEvent('oo:visibility:all', { detail: { show: drawingsVisible } }));
+  };
+  // Listen for visibility changes from profile settings
+  document.addEventListener('oo:visibility:all', ((e: CustomEvent) => {
+    drawingsVisible = e.detail.show;
+    updateVisibilityIcon();
+  }) as EventListener);
+  container.appendChild(quickVisibility);
+
+  // Dismiss Smudgy button (shown when Smudgy is doing ambient behavior)
+  const dismissSmudgy = document.createElement('button');
+  dismissSmudgy.className = 'dismiss-smudgy';
+  dismissSmudgy.textContent = '✕';
+  dismissSmudgy.title = 'Dismiss Smudgy';
+  dismissSmudgy.onclick = (e) => {
+    e.stopPropagation();
+    // Dispatch event to dismiss Smudgy's ambient behavior
+    document.dispatchEvent(new CustomEvent('oo:dismisssmudgy'));
+    dismissSmudgy.classList.remove('show');
+  };
+  container.appendChild(dismissSmudgy);
+
+  // Listen for ambient behavior starting (show dismiss button)
+  document.addEventListener('oo:ambientstart', () => {
+    dismissSmudgy.classList.add('show');
+  });
+
+  // Listen for ambient behavior ending (hide dismiss button)
+  document.addEventListener('oo:ambientend', () => {
+    dismissSmudgy.classList.remove('show');
+  });
+
   // Draw button
   const drawBtn = document.createElement('button');
   drawBtn.className = 'mini';
@@ -1750,6 +2003,37 @@ export function initUI(): void {
           </div>
         </div>
       </div>
+      <div class="profile-settings" id="character-settings">
+        <div class="profile-settings-header">Character Settings</div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Character</span>
+          <div class="char-toggle-profile">
+            <button class="char-btn-profile active" id="profile-char-boy" title="Boy">👦</button>
+            <button class="char-btn-profile" id="profile-char-girl" title="Girl">👧</button>
+          </div>
+        </div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Color</span>
+          <div class="profile-color-picker" id="profile-color-picker">
+            <div class="profile-color-swatches" id="profile-color-swatches"></div>
+          </div>
+        </div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Hat</span>
+          <select class="profile-select" id="profile-hat-select">
+            <option value="none">None</option>
+            <option value="cap">🧢 Cap</option>
+            <option value="tophat">🎩 Top Hat</option>
+            <option value="crown">👑 Crown</option>
+            <option value="beanie">🧶 Beanie</option>
+            <option value="party">🎉 Party</option>
+          </select>
+        </div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Respawn in explore</span>
+          <div class="toggle-switch active" id="toggle-respawn" title="Respawn when falling off screen"></div>
+        </div>
+      </div>
       <div class="profile-settings">
         <div class="profile-settings-header">Drawing Visibility</div>
         <div class="profile-setting-row">
@@ -1870,30 +2154,6 @@ export function initUI(): void {
         </div>
         <button class="multiplayer-btn" id="oo-multiplayer-setup" title="Setup for multiplayer (resize window)">👥 MP</button>
         <button class="multiplayer-btn" id="oo-tag-game" title="Start or join tag game">🏷️ Tag</button>
-        <div class="char-style-toggle">
-          <button class="char-style-btn active" id="oo-char-boy" title="Boy">👦</button>
-          <button class="char-style-btn" id="oo-char-girl" title="Girl">👧</button>
-        </div>
-        <select class="char-customize-select" id="oo-hat-select" title="Hat">
-          <option value="none">🎩</option>
-          <option value="cap">🧢</option>
-          <option value="tophat">🎩</option>
-          <option value="crown">👑</option>
-          <option value="beanie">🧶</option>
-          <option value="party">🎉</option>
-        </select>
-        <select class="char-customize-select" id="oo-accessory-select" title="Accessory">
-          <option value="none">😊</option>
-          <option value="glasses">👓</option>
-          <option value="sunglasses">🕶️</option>
-          <option value="mustache">🥸</option>
-          <option value="beard">🧔</option>
-          <option value="mask">🦸</option>
-        </select>
-        <select class="char-customize-select" id="oo-face-select" title="Face Style">
-          <option value="smudgy">Smudgy</option>
-          <option value="normal">Classic</option>
-        </select>
       </div>
 
       <!-- Row 2: Build Tools (hidden by default, shown when build mode selected) -->
@@ -2281,69 +2541,6 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     });
   });
 
-  // Character style toggle (boy/girl)
-  const boyBtn = toolbar.querySelector('#oo-char-boy');
-  const girlBtn = toolbar.querySelector('#oo-char-girl');
-
-  boyBtn?.addEventListener('click', () => {
-    boyBtn.classList.add('active');
-    girlBtn?.classList.remove('active');
-    document.dispatchEvent(new CustomEvent('oo:playerstyle', { detail: { isGirl: false } }));
-    localStorage.setItem('oo_player_girl', 'false');
-  });
-
-  girlBtn?.addEventListener('click', () => {
-    girlBtn.classList.add('active');
-    boyBtn?.classList.remove('active');
-    document.dispatchEvent(new CustomEvent('oo:playerstyle', { detail: { isGirl: true } }));
-    localStorage.setItem('oo_player_girl', 'true');
-  });
-
-  // Restore character style from localStorage
-  if (localStorage.getItem('oo_player_girl') === 'true') {
-    boyBtn?.classList.remove('active');
-    girlBtn?.classList.add('active');
-  }
-
-  // Hat selection
-  const hatSelect = toolbar.querySelector('#oo-hat-select') as HTMLSelectElement;
-  hatSelect?.addEventListener('change', () => {
-    const hat = hatSelect.value;
-    document.dispatchEvent(new CustomEvent('oo:playerhat', { detail: { hat } }));
-  });
-
-  // Restore saved hat
-  const savedHat = localStorage.getItem('oo_player_hat');
-  if (savedHat && hatSelect) {
-    hatSelect.value = savedHat;
-  }
-
-  // Accessory selection
-  const accessorySelect = toolbar.querySelector('#oo-accessory-select') as HTMLSelectElement;
-  accessorySelect?.addEventListener('change', () => {
-    const accessory = accessorySelect.value;
-    document.dispatchEvent(new CustomEvent('oo:playeraccessory', { detail: { accessory } }));
-  });
-
-  // Restore saved accessory
-  const savedAccessory = localStorage.getItem('oo_player_accessory');
-  if (savedAccessory && accessorySelect) {
-    accessorySelect.value = savedAccessory;
-  }
-
-  // Face style selection
-  const faceSelect = toolbar.querySelector('#oo-face-select') as HTMLSelectElement;
-  faceSelect?.addEventListener('change', () => {
-    const face = faceSelect.value;
-    document.dispatchEvent(new CustomEvent('oo:playerface', { detail: { face } }));
-  });
-
-  // Restore saved face style
-  const savedFace = localStorage.getItem('oo_player_face') || 'smudgy';
-  if (faceSelect) {
-    faceSelect.value = savedFace;
-  }
-
   // Game mode color picker
   const gameColorInput = toolbar.querySelector('#oo-game-color') as HTMLInputElement;
   gameColorInput?.addEventListener('input', () => {
@@ -2379,8 +2576,10 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   });
 
   toolbar.querySelector('#oo-game-cancel')?.addEventListener('click', () => {
+    // Just close the toolbar without clearing anything
+    // Save first to preserve any changes, then close
+    document.dispatchEvent(new CustomEvent('oo:save'));
     setMode('none');
-    document.dispatchEvent(new CustomEvent('oo:cancel'));
   });
 
   toolbar.querySelector('#oo-game-save')?.addEventListener('click', () => {
@@ -2678,6 +2877,11 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   });
 
   // Feedback form submission
+  const feedbackTextArea = shadowRoot.querySelector('#feedback-text') as HTMLTextAreaElement;
+  feedbackTextArea?.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // Prevent page keyboard shortcuts while typing
+  });
+
   const feedbackSubmitBtn = shadowRoot.querySelector('#feedback-submit');
   feedbackSubmitBtn?.addEventListener('click', async () => {
     const typeSelect = shadowRoot?.querySelector('#feedback-type') as HTMLSelectElement;
@@ -2728,6 +2932,79 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   document.addEventListener('oo:contributors', ((e: CustomEvent) => {
     renderContributorsList(shadowRoot, e.detail.contributors);
   }) as EventListener);
+
+  // Character settings in profile (boy/girl toggle)
+  const profileBoyBtn = shadowRoot.querySelector('#profile-char-boy');
+  const profileGirlBtn = shadowRoot.querySelector('#profile-char-girl');
+  const profileHatSelect = shadowRoot.querySelector('#profile-hat-select') as HTMLSelectElement;
+  const respawnToggle = shadowRoot.querySelector('#toggle-respawn') as HTMLElement;
+
+  profileBoyBtn?.addEventListener('click', () => {
+    profileBoyBtn.classList.add('active');
+    profileGirlBtn?.classList.remove('active');
+    document.dispatchEvent(new CustomEvent('oo:playerstyle', { detail: { isGirl: false } }));
+    localStorage.setItem('oo_player_girl', 'false');
+  });
+
+  profileGirlBtn?.addEventListener('click', () => {
+    profileGirlBtn.classList.add('active');
+    profileBoyBtn?.classList.remove('active');
+    document.dispatchEvent(new CustomEvent('oo:playerstyle', { detail: { isGirl: true } }));
+    localStorage.setItem('oo_player_girl', 'true');
+  });
+
+  // Restore character style from localStorage
+  if (localStorage.getItem('oo_player_girl') === 'true') {
+    profileBoyBtn?.classList.remove('active');
+    profileGirlBtn?.classList.add('active');
+  }
+
+  // Hat selection in profile
+  profileHatSelect?.addEventListener('change', () => {
+    const hat = profileHatSelect.value;
+    document.dispatchEvent(new CustomEvent('oo:playerhat', { detail: { hat } }));
+    localStorage.setItem('oo_player_hat', hat);
+  });
+
+  // Restore saved hat
+  const savedHatProfile = localStorage.getItem('oo_player_hat');
+  if (savedHatProfile && profileHatSelect) {
+    profileHatSelect.value = savedHatProfile;
+  }
+
+  // Respawn toggle in profile
+  const savedRespawn = localStorage.getItem('oo_explore_respawn') !== 'false'; // Default true
+  if (!savedRespawn) {
+    respawnToggle?.classList.remove('active');
+  }
+
+  respawnToggle?.addEventListener('click', () => {
+    respawnToggle.classList.toggle('active');
+    const shouldRespawn = respawnToggle.classList.contains('active');
+    localStorage.setItem('oo_explore_respawn', shouldRespawn ? 'true' : 'false');
+    document.dispatchEvent(new CustomEvent('oo:respawnsetting', { detail: { respawn: shouldRespawn } }));
+  });
+
+  // Color picker in profile
+  const colorSwatchesContainer = shadowRoot.querySelector('#profile-color-swatches');
+  if (colorSwatchesContainer) {
+    const colors = ['#ff3366', '#22c55e', '#3b82f6', '#f59e0b', '#8b5cf6', '#fff', '#000'];
+    const savedColor = localStorage.getItem('oo_player_color') || '#ff3366';
+
+    colorSwatchesContainer.innerHTML = colors.map((c) => `
+      <div class="profile-color-swatch ${c === savedColor ? 'active' : ''}" data-color="${c}" style="background: ${c}" title="${c}"></div>
+    `).join('');
+
+    colorSwatchesContainer.querySelectorAll('.profile-color-swatch').forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        const color = (swatch as HTMLElement).dataset.color || '#ff3366';
+        colorSwatchesContainer.querySelectorAll('.profile-color-swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        localStorage.setItem('oo_player_color', color);
+        document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color } }));
+      });
+    });
+  }
 
   // Listen for auth state changes
   onAuthStateChanged((user) => {
@@ -3196,6 +3473,7 @@ function dispatchSettingsChange(): void {
 }
 
 function toggleMenu(): void {
+  const wasOpen = isMenuOpen;
   isMenuOpen = !isMenuOpen;
 
   const fab = shadowRoot?.querySelector('.fab');
@@ -3203,6 +3481,11 @@ function toggleMenu(): void {
 
   fab?.classList.toggle('open', isMenuOpen);
   minis?.forEach(mini => mini.classList.toggle('show', isMenuOpen));
+
+  // Dispatch event when menu closes (for onboarding completion)
+  if (wasOpen && !isMenuOpen) {
+    window.dispatchEvent(new CustomEvent('oo:menuClosed'));
+  }
 }
 
 function toggleMode(mode: 'draw' | 'text' | 'game'): void {
@@ -3376,4 +3659,18 @@ export function openMenu(): void {
  */
 export function setModeExternal(mode: 'none' | 'draw' | 'text' | 'game'): void {
   setMode(mode);
+}
+
+/**
+ * Get quick explore button position (for onboarding)
+ */
+export function getQuickExplorePosition(): { x: number; y: number } | null {
+  if (!shadowRoot) return null;
+  const quickExplore = shadowRoot.querySelector('.quick-explore') as HTMLElement;
+  if (!quickExplore) return null;
+  const rect = quickExplore.getBoundingClientRect();
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+  };
 }
