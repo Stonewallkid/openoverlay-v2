@@ -2951,14 +2951,7 @@ function drawPlayer(): void {
       }
     }
 
-    // 5. Dress body - solid triangle (scaled 75%)
-    gameCtx.fillStyle = dressColor;
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX, bodyStartY);
-    gameCtx.lineTo(centerX - 8, bodyEndY + 1);
-    gameCtx.lineTo(centerX + 8, bodyEndY + 1);
-    gameCtx.closePath();
-    gameCtx.fill();
+    // Dress is drawn later (after arms/legs) so it layers on top
 
   } else {
     // === BOY CHARACTER - stick figure style ===
@@ -3315,6 +3308,18 @@ function drawPlayer(): void {
     // Standing: legs straight down, slight spread
     drawLineWithOutline(centerX, hipY, centerX - 4, hipY + limbLength);
     drawLineWithOutline(centerX, hipY, centerX + 4, hipY + limbLength);
+  }
+
+  // Girl's dress - drawn AFTER arms/legs so it layers on top
+  if (isGirlMode) {
+    gameCtx.fillStyle = dressColor;
+    gameCtx.beginPath();
+    gameCtx.moveTo(centerX, bodyStartY);
+    // Longer dress - extends 5px past bodyEndY, wider at bottom
+    gameCtx.lineTo(centerX - 10, bodyEndY + 5);
+    gameCtx.lineTo(centerX + 10, bodyEndY + 5);
+    gameCtx.closePath();
+    gameCtx.fill();
   }
 
   // Draw accessories on top
