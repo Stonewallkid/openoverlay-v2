@@ -2094,6 +2094,15 @@ export function initUI(): void {
           </div>
         </div>
       </div>
+      <div class="profile-settings" id="race-course-settings" style="display: none;">
+        <div class="profile-settings-header">Race Course</div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Select course</span>
+          <select class="profile-select" id="race-course-select">
+            <option value="mine">My Course</option>
+          </select>
+        </div>
+      </div>
       <div class="profile-bookmarks" id="profile-bookmarks">
         <div class="profile-bookmarks-header">
           Bookmarks <span class="profile-bookmarks-count" id="bookmarks-count">0</span>
@@ -3086,6 +3095,54 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       });
     });
   }
+
+  // Race course selector
+  const raceCourseSettings = shadowRoot.querySelector('#race-course-settings') as HTMLElement;
+  const raceCourseSelect = shadowRoot.querySelector('#race-course-select') as HTMLSelectElement;
+
+  // Listen for course updates from game module
+  document.addEventListener('oo:coursesupdate', ((e: CustomEvent) => {
+    const { myCourse, otherCourses } = e.detail;
+    const allCourses = [
+      { id: 'mine', name: 'My Course', hasElements: myCourse?.checkpoints?.length > 0 },
+      ...otherCourses.map((c: { userId: string; displayName: string; checkpoints: unknown[] }) => ({
+        id: c.userId,
+        name: c.displayName || 'Unknown',
+        hasElements: c.checkpoints?.length > 0
+      }))
+    ].filter(c => c.hasElements);
+
+    // Only show section if there are courses
+    if (raceCourseSettings) {
+      raceCourseSettings.style.display = allCourses.length > 0 ? 'block' : 'none';
+    }
+
+    // Update select options
+    if (raceCourseSelect && allCourses.length > 0) {
+      const currentValue = raceCourseSelect.value;
+      raceCourseSelect.innerHTML = allCourses.map(c =>
+        `<option value="${c.id}">${c.name}</option>`
+      ).join('');
+
+      // Restore previous selection if still valid, otherwise default to first
+      if (allCourses.some(c => c.id === currentValue)) {
+        raceCourseSelect.value = currentValue;
+      } else {
+        raceCourseSelect.value = allCourses[0].id;
+        // Notify game of default selection
+        document.dispatchEvent(new CustomEvent('oo:selectcourse', {
+          detail: { courseId: allCourses[0].id }
+        }));
+      }
+    }
+  }) as EventListener);
+
+  // Handle course selection change
+  raceCourseSelect?.addEventListener('change', () => {
+    document.dispatchEvent(new CustomEvent('oo:selectcourse', {
+      detail: { courseId: raceCourseSelect.value }
+    }));
+  });
 
   // Listen for auth state changes
   onAuthStateChanged((user) => {

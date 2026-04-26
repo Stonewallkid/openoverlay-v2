@@ -243,6 +243,32 @@ let currentCourse: Course = {
 // Other users' courses (synced from Firebase)
 let otherUsersCourses: Course[] = [];
 
+// Selected course for racing (null = my course, otherwise userId)
+let selectedRaceCourseId: string | null = null;
+
+// Get the active race course (selected or mine)
+function getActiveCourse(): Course {
+  if (selectedRaceCourseId && selectedRaceCourseId !== 'mine') {
+    const found = otherUsersCourses.find(c => c.userId === selectedRaceCourseId);
+    if (found) return found;
+  }
+  return currentCourse;
+}
+
+// Dispatch course updates to UI
+function dispatchCoursesUpdate(): void {
+  document.dispatchEvent(new CustomEvent('oo:coursesupdate', {
+    detail: {
+      myCourse: currentCourse,
+      otherCourses: otherUsersCourses.map(c => ({
+        userId: c.userId,
+        displayName: c.displayName,
+        checkpoints: c.checkpoints
+      }))
+    }
+  }));
+}
+
 // Game physics
 const GRAVITY = 0.6;
 const JUMP_FORCE = -12;  // Reduced slightly for smaller player
@@ -382,6 +408,13 @@ export function initGame(): void {
       render();
     }
   });
+
+  // Listen for race course selection changes
+  document.addEventListener('oo:selectcourse', ((e: CustomEvent) => {
+    selectedRaceCourseId = e.detail.courseId === 'mine' ? null : e.detail.courseId;
+    console.log('[OpenOverlay] Selected race course:', selectedRaceCourseId || 'mine');
+    render();
+  }) as EventListener);
 
   // Listen for player color changes (legacy - sets all parts)
   document.addEventListener('oo:playercolor', ((e: CustomEvent) => {
@@ -816,8 +849,10 @@ function respawnPlayer(): void {
   }
 
   // Find spawn point or start point
-  const spawnPoint = currentCourse.checkpoints.find(c => c.type === 'spawn');
-  const startPoint = currentCourse.checkpoints.find(c => c.type === 'start');
+  // Use selected course for spawn/start points in race mode, otherwise current course
+  const activeCourse = playMode === 'race' ? getActiveCourse() : currentCourse;
+  const spawnPoint = activeCourse.checkpoints.find(c => c.type === 'spawn');
+  const startPoint = activeCourse.checkpoints.find(c => c.type === 'start');
   const respawnAt = spawnPoint || startPoint;
 
   if (respawnAt) {
@@ -1693,15 +1728,13 @@ function checkCheckpoints(): void {
   // Only track checkpoints in race mode
   if (playMode !== 'race') return;
 
-  // Combine checkpoints from my course and other users' courses
-  const allCheckpoints: Checkpoint[] = [
-    ...currentCourse.checkpoints,
-    ...otherUsersCourses.flatMap(c => c.checkpoints)
-  ];
+  // Use only the selected race course's checkpoints
+  const activeCourse = getActiveCourse();
+  const raceCheckpoints: Checkpoint[] = activeCourse.checkpoints;
 
-  const totalCheckpoints = allCheckpoints.filter(c => c.type === 'checkpoint').length;
+  const totalCheckpoints = raceCheckpoints.filter(c => c.type === 'checkpoint').length;
 
-  for (const checkpoint of allCheckpoints) {
+  for (const checkpoint of raceCheckpoints) {
     if (checkpoint.reached) continue;
 
     const playerCenterX = player.x + player.width / 2;
@@ -1731,10 +1764,13 @@ function checkCheckpoints(): void {
           finishTime = raceTime;
           console.log('[OpenOverlay] Race finished! Time:', (finishTime / 1000).toFixed(2) + 's');
 
-          // Check for best time
-          if (!currentCourse.bestTime || finishTime < currentCourse.bestTime) {
-            currentCourse.bestTime = finishTime;
-            saveCourse();
+          // Check for best time on the active course
+          if (!activeCourse.bestTime || finishTime < activeCourse.bestTime) {
+            activeCourse.bestTime = finishTime;
+            // Only save if it's our own course
+            if (activeCourse === currentCourse) {
+              saveCourse();
+            }
           }
 
           // Remove restart button and show finish popup
@@ -1743,7 +1779,7 @@ function checkCheckpoints(): void {
 
           // Dispatch finish event
           document.dispatchEvent(new CustomEvent('oo:racefinish', {
-            detail: { time: finishTime, bestTime: currentCourse.bestTime }
+            detail: { time: finishTime, bestTime: activeCourse.bestTime }
           }));
         }
       }
@@ -4125,6 +4161,9 @@ function loadCourse(): void {
 
       console.log('[OpenOverlay] Course sync: mine=', currentCourse.checkpoints.length, 'elements, others=', otherUsersCourses.length, 'courses');
 
+      // Notify UI of course updates
+      dispatchCoursesUpdate();
+
       // Re-render if in game mode
       if (gameMode !== 'none') {
         render();
@@ -4140,6 +4179,8 @@ function loadCourse(): void {
       // Reset reached states
       currentCourse.checkpoints.forEach(c => c.reached = false);
       console.log('[OpenOverlay] Course loaded from localStorage:', currentCourse.checkpoints.length, 'checkpoints');
+      // Notify UI of initial course
+      dispatchCoursesUpdate();
     } catch (e) {
       console.warn('[OpenOverlay] Failed to load course');
     }
