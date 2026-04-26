@@ -91,6 +91,10 @@ const ACCESSORIES = ['none', 'glasses', 'sunglasses', 'mustache', 'beard', 'mask
 // Girl mode (longer hair + dress)
 let isGirlMode = localStorage.getItem('oo_player_girl') === 'true';
 
+// Face style ('smudgy' = pink circle eye, 'normal' = classic stick figure face)
+let faceStyle = localStorage.getItem('oo_player_face') || 'smudgy';
+const FACE_STYLES = ['smudgy', 'normal'];
+
 // Blood splat effects
 interface BloodSplat {
   x: number;
@@ -338,6 +342,13 @@ export function initGame(): void {
   document.addEventListener('oo:playeraccessory', ((e: CustomEvent) => {
     playerAccessory = e.detail.accessory;
     localStorage.setItem('oo_player_accessory', playerAccessory);
+    render();
+  }) as EventListener);
+
+  // Listen for face style changes
+  document.addEventListener('oo:playerface', ((e: CustomEvent) => {
+    faceStyle = e.detail.face;
+    localStorage.setItem('oo_player_face', faceStyle);
     render();
   }) as EventListener);
 
@@ -1430,6 +1441,7 @@ function syncPlayerToCloud(): void {
     playerHat: playerHat,
     playerAccessory: playerAccessory,
     isGirlMode: isGirlMode,
+    faceStyle: faceStyle,
     displayName: customScreenName || currentUser?.displayName || '',
     updatedAt: now,
     // Tag game state (use helper for fallback)
@@ -2153,33 +2165,38 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.fill();
 
     // 4. Face features (on white face)
-    gameCtx.fillStyle = color;
-    if (isMoving) {
-      // Running: single side eye + small mouth dash
-      gameCtx.beginPath();
-      gameCtx.arc(centerX + 2, headY, 1.5, 0, Math.PI * 2);
-      gameCtx.fill();
-      // Mouth dash
-      gameCtx.lineWidth = 2;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, headY + 4);
-      gameCtx.lineTo(centerX + 4, headY + 4);
-      gameCtx.stroke();
-      gameCtx.lineWidth = 3;
+    const remoteFaceStyle = (rp as any).faceStyle || 'smudgy';
+    if (remoteFaceStyle === 'smudgy') {
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, rp.vx, rp.vy, rp.onGround !== false);
     } else {
-      // Standing: two eyes + smile
-      gameCtx.beginPath();
-      gameCtx.arc(centerX - 3, headY, 1.5, 0, Math.PI * 2);
-      gameCtx.fill();
-      gameCtx.beginPath();
-      gameCtx.arc(centerX + 3, headY, 1.5, 0, Math.PI * 2);
-      gameCtx.fill();
-      // Smile
-      gameCtx.lineWidth = 1.5;
-      gameCtx.beginPath();
-      gameCtx.arc(centerX, headY + 3, 2.5, 0.2 * Math.PI, 0.8 * Math.PI);
-      gameCtx.stroke();
-      gameCtx.lineWidth = 3;
+      gameCtx.fillStyle = color;
+      if (isMoving) {
+        // Running: single side eye + small mouth dash
+        gameCtx.beginPath();
+        gameCtx.arc(centerX + 2, headY, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        // Mouth dash
+        gameCtx.lineWidth = 2;
+        gameCtx.beginPath();
+        gameCtx.moveTo(centerX, headY + 4);
+        gameCtx.lineTo(centerX + 4, headY + 4);
+        gameCtx.stroke();
+        gameCtx.lineWidth = 3;
+      } else {
+        // Standing: two eyes + smile
+        gameCtx.beginPath();
+        gameCtx.arc(centerX - 3, headY, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        gameCtx.beginPath();
+        gameCtx.arc(centerX + 3, headY, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        // Smile
+        gameCtx.lineWidth = 1.5;
+        gameCtx.beginPath();
+        gameCtx.arc(centerX, headY + 3, 2.5, 0.2 * Math.PI, 0.8 * Math.PI);
+        gameCtx.stroke();
+        gameCtx.lineWidth = 3;
+      }
     }
 
     // 5. Dress body - solid triangle (scaled 75%)
@@ -2212,42 +2229,50 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
     gameCtx.stroke();
 
-    // Hair - marker tip style (scaled 75%)
-    gameCtx.fillStyle = color;
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX - 6, headY - headRadius + 1);
-    gameCtx.lineTo(centerX - 3, headY - headRadius - 4);
-    gameCtx.lineTo(centerX + 8, headY - headRadius + 3);
-    gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 6, headY - headRadius + 1);
-    gameCtx.closePath();
-    gameCtx.fill();
-    gameCtx.stroke();
-
-    // Face
-    gameCtx.fillStyle = color;
-    if (isMoving) {
-      // Running: single side eye + mouth dash
-      gameCtx.beginPath();
-      gameCtx.arc(centerX + 3, headY - 1, 2, 0, Math.PI * 2);
+    const remoteFaceStyleBoy = (rp as any).faceStyle || 'smudgy';
+    if (remoteFaceStyleBoy === 'smudgy') {
+      // Fill head white for Smudgy face
+      gameCtx.fillStyle = '#ffffff';
       gameCtx.fill();
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX + 1, headY + 4);
-      gameCtx.lineTo(centerX + 5, headY + 4);
-      gameCtx.stroke();
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, rp.vx, rp.vy, rp.onGround !== false);
     } else {
-      // Standing: two eyes + smile
+      // Hair - marker tip style (scaled 75%)
+      gameCtx.fillStyle = color;
       gameCtx.beginPath();
-      gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
+      gameCtx.moveTo(centerX - 6, headY - headRadius + 1);
+      gameCtx.lineTo(centerX - 3, headY - headRadius - 4);
+      gameCtx.lineTo(centerX + 8, headY - headRadius + 3);
+      gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 6, headY - headRadius + 1);
+      gameCtx.closePath();
       gameCtx.fill();
-      gameCtx.beginPath();
-      gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
-      gameCtx.fill();
-      // Smile
-      gameCtx.lineWidth = 1.5;
-      gameCtx.beginPath();
-      gameCtx.arc(centerX, headY + 3, 3, 0.2 * Math.PI, 0.8 * Math.PI);
       gameCtx.stroke();
-      gameCtx.lineWidth = 3;
+
+      // Face
+      gameCtx.fillStyle = color;
+      if (isMoving) {
+        // Running: single side eye + mouth dash
+        gameCtx.beginPath();
+        gameCtx.arc(centerX + 3, headY - 1, 2, 0, Math.PI * 2);
+        gameCtx.fill();
+        gameCtx.beginPath();
+        gameCtx.moveTo(centerX + 1, headY + 4);
+        gameCtx.lineTo(centerX + 5, headY + 4);
+        gameCtx.stroke();
+      } else {
+        // Standing: two eyes + smile
+        gameCtx.beginPath();
+        gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        gameCtx.beginPath();
+        gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        // Smile
+        gameCtx.lineWidth = 1.5;
+        gameCtx.beginPath();
+        gameCtx.arc(centerX, headY + 3, 3, 0.2 * Math.PI, 0.8 * Math.PI);
+        gameCtx.stroke();
+        gameCtx.lineWidth = 3;
+      }
     }
 
     // Body
@@ -2409,6 +2434,46 @@ function drawRemoteHat(centerX: number, headY: number, headRadius: number, hat: 
   }
 }
 
+/**
+ * Draw Smudgy face - pink circle with white intrusion that follows movement
+ */
+function drawSmudgyFace(ctx: CanvasRenderingContext2D, centerX: number, headY: number, headRadius: number, vx: number, vy: number, onGround: boolean): void {
+  const PINK = '#ff69b4';
+
+  // Pink circle - almost fills head
+  ctx.fillStyle = PINK;
+  ctx.beginPath();
+  ctx.arc(centerX + 1, headY, headRadius - 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // White intrusion position based on movement
+  // Default: slightly down and forward (looking where going)
+  let eyeOffsetX = headRadius - 2.5;
+  let eyeOffsetY = 1.5;  // Slightly down
+
+  if (!onGround && vy < -2) {
+    // Jumping up - look up
+    eyeOffsetY = -2;
+    if (vx > 1) {
+      eyeOffsetX = headRadius - 2;
+    } else if (vx < -1) {
+      eyeOffsetX = headRadius - 2;
+    } else {
+      // Straight up
+      eyeOffsetX = headRadius - 3;
+      eyeOffsetY = -3;
+    }
+  } else if (!onGround && vy > 2) {
+    // Falling - look down
+    eyeOffsetY = 3;
+  }
+
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(centerX + eyeOffsetX, headY + eyeOffsetY, headRadius - 3.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 function drawPlayer(): void {
   if (!gameCtx) return;
 
@@ -2488,33 +2553,37 @@ function drawPlayer(): void {
     gameCtx.fill();
 
     // 4. Face features (on white face)
-    gameCtx.fillStyle = playerColor;
-    if (isMoving) {
-      // Running: single side eye + small mouth dash
-      gameCtx.beginPath();
-      gameCtx.arc(centerX + 2, headY, 1.5, 0, Math.PI * 2);
-      gameCtx.fill();
-      // Mouth dash
-      gameCtx.lineWidth = 2;
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX, headY + 4);
-      gameCtx.lineTo(centerX + 4, headY + 4);
-      gameCtx.stroke();
-      gameCtx.lineWidth = 3;
+    if (faceStyle === 'smudgy') {
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, player.vx, player.vy, player.onGround);
     } else {
-      // Standing: two eyes + smile
-      gameCtx.beginPath();
-      gameCtx.arc(centerX - 3, headY, 1.5, 0, Math.PI * 2);
-      gameCtx.fill();
-      gameCtx.beginPath();
-      gameCtx.arc(centerX + 3, headY, 1.5, 0, Math.PI * 2);
-      gameCtx.fill();
-      // Smile
-      gameCtx.lineWidth = 1.5;
-      gameCtx.beginPath();
-      gameCtx.arc(centerX, headY + 3, 2.5, 0.2 * Math.PI, 0.8 * Math.PI);
-      gameCtx.stroke();
-      gameCtx.lineWidth = 3;
+      gameCtx.fillStyle = playerColor;
+      if (isMoving) {
+        // Running: single side eye + small mouth dash
+        gameCtx.beginPath();
+        gameCtx.arc(centerX + 2, headY, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        // Mouth dash
+        gameCtx.lineWidth = 2;
+        gameCtx.beginPath();
+        gameCtx.moveTo(centerX, headY + 4);
+        gameCtx.lineTo(centerX + 4, headY + 4);
+        gameCtx.stroke();
+        gameCtx.lineWidth = 3;
+      } else {
+        // Standing: two eyes + smile
+        gameCtx.beginPath();
+        gameCtx.arc(centerX - 3, headY, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        gameCtx.beginPath();
+        gameCtx.arc(centerX + 3, headY, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        // Smile
+        gameCtx.lineWidth = 1.5;
+        gameCtx.beginPath();
+        gameCtx.arc(centerX, headY + 3, 2.5, 0.2 * Math.PI, 0.8 * Math.PI);
+        gameCtx.stroke();
+        gameCtx.lineWidth = 3;
+      }
     }
 
     // 5. Dress body - solid triangle (scaled 75%)
@@ -2534,39 +2603,47 @@ function drawPlayer(): void {
     gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
     gameCtx.stroke();
 
-    // Hair - marker tip style (scaled 75%)
-    gameCtx.fillStyle = playerColor;
-    gameCtx.beginPath();
-    gameCtx.moveTo(centerX - 6, headY - headRadius + 1);
-    gameCtx.lineTo(centerX - 3, headY - headRadius - 4);
-    gameCtx.lineTo(centerX + 8, headY - headRadius + 3);
-    gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 6, headY - headRadius + 1);
-    gameCtx.closePath();
-    gameCtx.fill();
-    gameCtx.stroke();
-
-    // Face
-    gameCtx.fillStyle = playerColor;
-    if (isMoving) {
-      // Running: single side eye + mouth dash
-      gameCtx.beginPath();
-      gameCtx.arc(centerX + 3, headY - 1, 2, 0, Math.PI * 2);
+    if (faceStyle === 'smudgy') {
+      // Fill head with white for Smudgy face
+      gameCtx.fillStyle = '#ffffff';
       gameCtx.fill();
-      gameCtx.beginPath();
-      gameCtx.moveTo(centerX + 1, headY + 4);
-      gameCtx.lineTo(centerX + 5, headY + 4);
-      gameCtx.stroke();
+      // Draw Smudgy face
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, player.vx, player.vy, player.onGround);
     } else {
-      // Standing: two eyes + smile
+      // Hair - marker tip style (scaled 75%)
+      gameCtx.fillStyle = playerColor;
       gameCtx.beginPath();
-      gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
+      gameCtx.moveTo(centerX - 6, headY - headRadius + 1);
+      gameCtx.lineTo(centerX - 3, headY - headRadius - 4);
+      gameCtx.lineTo(centerX + 8, headY - headRadius + 3);
+      gameCtx.quadraticCurveTo(centerX, headY - headRadius - 1, centerX - 6, headY - headRadius + 1);
+      gameCtx.closePath();
       gameCtx.fill();
-      gameCtx.beginPath();
-      gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
-      gameCtx.fill();
-      gameCtx.beginPath();
-      gameCtx.arc(centerX, headY + 3, 3, 0.1 * Math.PI, 0.9 * Math.PI);
       gameCtx.stroke();
+
+      // Face
+      gameCtx.fillStyle = playerColor;
+      if (isMoving) {
+        // Running: single side eye + mouth dash
+        gameCtx.beginPath();
+        gameCtx.arc(centerX + 3, headY - 1, 2, 0, Math.PI * 2);
+        gameCtx.fill();
+        gameCtx.beginPath();
+        gameCtx.moveTo(centerX + 1, headY + 4);
+        gameCtx.lineTo(centerX + 5, headY + 4);
+        gameCtx.stroke();
+      } else {
+        // Standing: two eyes + smile
+        gameCtx.beginPath();
+        gameCtx.arc(centerX - 3, headY - 1, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        gameCtx.beginPath();
+        gameCtx.arc(centerX + 3, headY - 1, 1.5, 0, Math.PI * 2);
+        gameCtx.fill();
+        gameCtx.beginPath();
+        gameCtx.arc(centerX, headY + 3, 3, 0.1 * Math.PI, 0.9 * Math.PI);
+        gameCtx.stroke();
+      }
     }
 
     // Stick body

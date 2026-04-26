@@ -1882,13 +1882,17 @@ export function initUI(): void {
           <option value="beanie">🧶</option>
           <option value="party">🎉</option>
         </select>
-        <select class="char-customize-select" id="oo-accessory-select" title="Face">
+        <select class="char-customize-select" id="oo-accessory-select" title="Accessory">
           <option value="none">😊</option>
           <option value="glasses">👓</option>
           <option value="sunglasses">🕶️</option>
           <option value="mustache">🥸</option>
           <option value="beard">🧔</option>
           <option value="mask">🦸</option>
+        </select>
+        <select class="char-customize-select" id="oo-face-select" title="Face Style">
+          <option value="smudgy">Smudgy</option>
+          <option value="normal">Classic</option>
         </select>
       </div>
 
@@ -2325,6 +2329,19 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   const savedAccessory = localStorage.getItem('oo_player_accessory');
   if (savedAccessory && accessorySelect) {
     accessorySelect.value = savedAccessory;
+  }
+
+  // Face style selection
+  const faceSelect = toolbar.querySelector('#oo-face-select') as HTMLSelectElement;
+  faceSelect?.addEventListener('change', () => {
+    const face = faceSelect.value;
+    document.dispatchEvent(new CustomEvent('oo:playerface', { detail: { face } }));
+  });
+
+  // Restore saved face style
+  const savedFace = localStorage.getItem('oo_player_face') || 'smudgy';
+  if (faceSelect) {
+    faceSelect.value = savedFace;
   }
 
   // Game mode color picker

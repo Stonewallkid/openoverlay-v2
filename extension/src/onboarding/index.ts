@@ -466,86 +466,164 @@ function drawMotionLines(): void {
 }
 
 /**
- * Draw Smudgy character
+ * Draw Smudgy character - uses same body as game character but with pink circle face
  */
 function drawSmudgy(x: number, y: number, facingRight: boolean, animFrame: number, waving: boolean): void {
   if (!ctx) return;
 
   ctx.save();
 
-  const headY = y - 35;
-  const bodyY = y - 20;
-
-  // Calculate walk cycle
-  const walkCycle = Math.sin(animFrame * Math.PI * 0.5);
-
-  // Head - white circle with black outline
-  ctx.fillStyle = WHITE;
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(x, headY, 12, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // C-shaped pink element (the distinctive Smudgy eye/mouth)
-  ctx.fillStyle = PINK;
-  ctx.strokeStyle = PINK;
-  ctx.lineWidth = 3;
-  ctx.lineCap = 'round';
-
-  if (facingRight) {
-    // Pink C on the right side of face
-    ctx.beginPath();
-    ctx.arc(x + 2, headY, 6, -Math.PI * 0.5, Math.PI * 0.5, false);
-    ctx.stroke();
-  } else {
-    // Pink C on the left side of face (flipped)
-    ctx.beginPath();
-    ctx.arc(x - 2, headY, 6, Math.PI * 0.5, -Math.PI * 0.5, false);
-    ctx.stroke();
+  // Flip if facing left
+  if (!facingRight) {
+    ctx.translate(x, 0);
+    ctx.scale(-1, 1);
+    ctx.translate(-x, 0);
   }
 
-  // Body
+  // Same dimensions as game character (scaled 75%)
+  const headRadius = 7;
+  const bodyLength = 13;
+  const limbLength = 11;
+
+  const centerX = x;
+  const headY = y - 38 + headRadius + 3;
+  const bodyStartY = headY + headRadius;
+  const bodyEndY = bodyStartY + bodyLength;
+
   ctx.strokeStyle = WHITE;
   ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 2;
+
+  const isMoving = Math.abs(state.smudgyVx) > 0.5;
+
+  // Head circle (white outline)
   ctx.beginPath();
-  ctx.moveTo(x, headY + 12);
-  ctx.lineTo(x, bodyY + 15);
+  ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Arms
-  const armSwing = walkCycle * 0.4;
-  const leftArmAngle = waving ? -Math.PI * 0.7 + Math.sin(animFrame * 2) * 0.3 : -Math.PI * 0.3 + armSwing;
-  const rightArmAngle = waving ? -Math.PI * 0.3 : -Math.PI * 0.7 - armSwing;
+  // Fill head with white first
+  ctx.fillStyle = WHITE;
+  ctx.fill();
 
-  // Left arm
+  // Pink circle - almost fills head
+  ctx.fillStyle = PINK;
   ctx.beginPath();
-  ctx.moveTo(x, bodyY);
-  ctx.lineTo(x + Math.cos(leftArmAngle) * 12, bodyY + Math.sin(leftArmAngle) * 12 + 12);
+  ctx.arc(centerX + 1, headY, headRadius - 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // White intrusion (creates crescent) - position based on movement
+  // Default: slightly down and forward (looking where going)
+  let eyeOffsetX = headRadius - 3;  // Forward
+  let eyeOffsetY = 2;  // Slightly down
+
+  if (!state.onGround && state.smudgyVy < -2) {
+    // Jumping up - look up
+    eyeOffsetY = -3;
+    if (state.smudgyVx > 1) {
+      eyeOffsetX = headRadius - 2;  // Up-right
+    } else if (state.smudgyVx < -1) {
+      eyeOffsetX = headRadius - 2;  // Still forward (will flip with character)
+    }
+  } else if (!state.onGround && state.smudgyVy > 2) {
+    // Falling - look down
+    eyeOffsetY = 4;
+  }
+
+  ctx.fillStyle = WHITE;
+  ctx.beginPath();
+  ctx.arc(centerX + eyeOffsetX, headY + eyeOffsetY, headRadius - 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Stick body
+  ctx.beginPath();
+  ctx.moveTo(centerX, bodyStartY);
+  ctx.lineTo(centerX, bodyEndY);
+  ctx.stroke();
+
+  // Animation
+  const walkCycle = Math.sin(animFrame * Math.PI);
+  const armSwing = walkCycle * 0.5;
+  const legSwing = walkCycle * 0.6;
+
+  // Wave animation
+  const waveAngle = waving ? Math.sin(animFrame * 3) * 0.5 : 0;
+
+  // Left arm (waves when waving)
+  ctx.beginPath();
+  ctx.moveTo(centerX, bodyStartY + 4);
+  if (waving) {
+    const waveX = centerX - limbLength * Math.cos(-0.8 + waveAngle);
+    const waveY = bodyStartY + 4 + limbLength * Math.sin(-0.8 + waveAngle);
+    ctx.lineTo(waveX, waveY);
+  } else {
+    ctx.lineTo(
+      centerX - limbLength * Math.cos(0.6 + armSwing),
+      bodyStartY + 4 + limbLength * Math.sin(0.6 + armSwing)
+    );
+  }
   ctx.stroke();
 
   // Right arm
   ctx.beginPath();
-  ctx.moveTo(x, bodyY);
-  ctx.lineTo(x + Math.cos(rightArmAngle) * 12, bodyY + Math.sin(rightArmAngle) * 12 + 12);
+  ctx.moveTo(centerX, bodyStartY + 4);
+  ctx.lineTo(
+    centerX + limbLength * Math.cos(0.6 - armSwing),
+    bodyStartY + 4 + limbLength * Math.sin(0.6 - armSwing)
+  );
   ctx.stroke();
 
   // Legs
-  const legSwing = walkCycle * 0.5;
-  const legY = bodyY + 15;
+  if (!state.onGround && state.smudgyVy < 0) {
+    // Jumping up - legs tucked
+    ctx.beginPath();
+    ctx.moveTo(centerX, bodyEndY);
+    ctx.lineTo(centerX - 5, bodyEndY + limbLength * 0.7);
+    ctx.stroke();
 
-  // Left leg
-  ctx.beginPath();
-  ctx.moveTo(x, legY);
-  ctx.lineTo(x - 6 + legSwing * 4, y);
-  ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(centerX, bodyEndY);
+    ctx.lineTo(centerX + 5, bodyEndY + limbLength * 0.7);
+    ctx.stroke();
+  } else if (!state.onGround) {
+    // Falling - legs spread
+    ctx.beginPath();
+    ctx.moveTo(centerX, bodyEndY);
+    ctx.lineTo(centerX - 8, bodyEndY + limbLength);
+    ctx.stroke();
 
-  // Right leg
-  ctx.beginPath();
-  ctx.moveTo(x, legY);
-  ctx.lineTo(x + 6 - legSwing * 4, y);
-  ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(centerX, bodyEndY);
+    ctx.lineTo(centerX + 8, bodyEndY + limbLength);
+    ctx.stroke();
+  } else {
+    // Walking/standing
+    const isWalking = isMoving;
+
+    // Left leg
+    ctx.beginPath();
+    ctx.moveTo(centerX, bodyEndY);
+    ctx.lineTo(
+      centerX - limbLength * (isWalking ? Math.sin(legSwing) * 0.8 : 0.3),
+      bodyEndY + limbLength * (isWalking ? Math.cos(legSwing * 0.5) : 0.95)
+    );
+    ctx.stroke();
+
+    // Right leg
+    ctx.beginPath();
+    ctx.moveTo(centerX, bodyEndY);
+    ctx.lineTo(
+      centerX + limbLength * (isWalking ? Math.sin(legSwing) * 0.8 : 0.3),
+      bodyEndY + limbLength * (isWalking ? Math.cos(legSwing * 0.5) : 0.95)
+    );
+    ctx.stroke();
+  }
 
   ctx.restore();
 }
@@ -645,51 +723,67 @@ export function showReturningUserWave(): void {
     const alpha = frame < 30 ? frame / 30 : frame > 90 ? (120 - frame) / 30 : 1;
     waveCtx.globalAlpha = alpha;
 
-    // Draw tiny waving Smudgy
-    const waveAnim = Math.sin(frame * 0.2) * 0.3;
+    // Draw tiny waving Smudgy (same style as game character)
+    const waveAnim = Math.sin(frame * 0.15) * 0.5;
 
-    // Head
+    waveCtx.strokeStyle = WHITE;
+    waveCtx.lineWidth = 2.5;
+    waveCtx.lineCap = 'round';
+    waveCtx.lineJoin = 'round';
+
+    // Shadow
+    waveCtx.shadowColor = 'rgba(0,0,0,0.3)';
+    waveCtx.shadowBlur = 3;
+    waveCtx.shadowOffsetX = 1;
+    waveCtx.shadowOffsetY = 1;
+
+    // Head circle
+    waveCtx.beginPath();
+    waveCtx.arc(40, 25, 8, 0, Math.PI * 2);
+    waveCtx.stroke();
     waveCtx.fillStyle = WHITE;
-    waveCtx.strokeStyle = '#333';
-    waveCtx.lineWidth = 1.5;
-    waveCtx.beginPath();
-    waveCtx.arc(40, 30, 10, 0, Math.PI * 2);
     waveCtx.fill();
-    waveCtx.stroke();
 
-    // Pink C
-    waveCtx.strokeStyle = PINK;
-    waveCtx.lineWidth = 2;
+    // Pink circle - almost fills head
+    waveCtx.fillStyle = PINK;
     waveCtx.beginPath();
-    waveCtx.arc(42, 30, 5, -Math.PI * 0.5, Math.PI * 0.5);
-    waveCtx.stroke();
+    waveCtx.arc(41, 25, 6, 0, Math.PI * 2);
+    waveCtx.fill();
+
+    // White intrusion
+    waveCtx.fillStyle = WHITE;
+    waveCtx.beginPath();
+    waveCtx.arc(45, 25, 4, 0, Math.PI * 2);
+    waveCtx.fill();
 
     // Body
-    waveCtx.strokeStyle = WHITE;
-    waveCtx.lineWidth = 2;
     waveCtx.beginPath();
-    waveCtx.moveTo(40, 40);
-    waveCtx.lineTo(40, 55);
+    waveCtx.moveTo(40, 33);
+    waveCtx.lineTo(40, 48);
     waveCtx.stroke();
 
-    // Waving arm
+    // Waving arm (left)
+    const waveX = 40 - 10 * Math.cos(-0.8 + waveAnim);
+    const waveY = 37 + 10 * Math.sin(-0.8 + waveAnim);
     waveCtx.beginPath();
-    waveCtx.moveTo(40, 45);
-    waveCtx.lineTo(50 + waveAnim * 5, 35 + waveAnim * 3);
+    waveCtx.moveTo(40, 37);
+    waveCtx.lineTo(waveX, waveY);
     waveCtx.stroke();
 
-    // Other arm
+    // Other arm (right)
     waveCtx.beginPath();
-    waveCtx.moveTo(40, 45);
-    waveCtx.lineTo(32, 52);
+    waveCtx.moveTo(40, 37);
+    waveCtx.lineTo(48, 44);
     waveCtx.stroke();
 
-    // Legs
+    // Legs (standing)
     waveCtx.beginPath();
-    waveCtx.moveTo(40, 55);
-    waveCtx.lineTo(35, 70);
-    waveCtx.moveTo(40, 55);
-    waveCtx.lineTo(45, 70);
+    waveCtx.moveTo(40, 48);
+    waveCtx.lineTo(36, 60);
+    waveCtx.stroke();
+    waveCtx.beginPath();
+    waveCtx.moveTo(40, 48);
+    waveCtx.lineTo(44, 60);
     waveCtx.stroke();
 
     if (frame < 120) {
