@@ -1332,7 +1332,7 @@ function update(dt: number): void {
   const isMoving = Math.abs(player.vx) > 0.5;
   if (isMoving) {
     // Check if it's time to glance back (explore mode, or during tag if we're not IT)
-    const isBeingChased = tagGameState?.gameActive && !isPlayerIt();
+    const isBeingChased = tagGameState?.gameActive && !isCurrentUserIt();
     const shouldGlance = playMode === 'explore' || isBeingChased;
     const distanceTraveled = Math.abs(player.x - lastGlanceX);
 
