@@ -1531,6 +1531,35 @@ const STYLES = `
     background: #22c55e22;
   }
 
+  .body-part-toggles {
+    display: flex;
+    gap: 4px;
+  }
+
+  .part-toggle {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid #444;
+    background: #222;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .part-toggle:hover {
+    border-color: #666;
+    transform: scale(1.05);
+  }
+
+  .part-toggle.active {
+    border-color: #22c55e;
+    background: #22c55e22;
+  }
+
   .profile-color-picker {
     display: flex;
     align-items: center;
@@ -2010,6 +2039,16 @@ export function initUI(): void {
           <div class="char-toggle-profile">
             <button class="char-btn-profile active" id="profile-char-boy" title="Boy">👦</button>
             <button class="char-btn-profile" id="profile-char-girl" title="Girl">👧</button>
+          </div>
+        </div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Part</span>
+          <div class="body-part-toggles" id="body-part-toggles">
+            <button class="part-toggle active" data-part="body" title="Body">🦴</button>
+            <button class="part-toggle" data-part="head" title="Head">⚪</button>
+            <button class="part-toggle" data-part="face" title="Face">🩷</button>
+            <button class="part-toggle" data-part="hair" title="Hair">💇</button>
+            <button class="part-toggle" data-part="dress" title="Dress">👗</button>
           </div>
         </div>
         <div class="profile-setting-row">
@@ -2985,11 +3024,34 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     document.dispatchEvent(new CustomEvent('oo:respawnsetting', { detail: { respawn: shouldRespawn } }));
   });
 
-  // Color picker in profile
+  // Body part color picker in profile
   const colorSwatchesContainer = shadowRoot.querySelector('#profile-color-swatches');
+  const bodyPartToggles = shadowRoot.querySelector('#body-part-toggles');
+
+  // Track which body part is currently selected for color changes
+  let selectedBodyPart = 'body'; // Default to body
+
+  // Helper to get saved color for a body part
+  const getPartColor = (part: string): string => {
+    if (part === 'face') {
+      return localStorage.getItem('oo_color_face') || '#ff69b4';
+    }
+    const partColor = localStorage.getItem(`oo_color_${part}`);
+    if (partColor) return partColor;
+    return localStorage.getItem('oo_player_color') || '#ffffff';
+  };
+
+  // Helper to update active swatch based on selected part
+  const updateActiveSwatchForPart = (part: string) => {
+    const partColor = getPartColor(part);
+    colorSwatchesContainer?.querySelectorAll('.profile-color-swatch').forEach(s => {
+      s.classList.toggle('active', (s as HTMLElement).dataset.color === partColor);
+    });
+  };
+
   if (colorSwatchesContainer) {
-    const colors = ['#ff3366', '#22c55e', '#3b82f6', '#f59e0b', '#8b5cf6', '#fff', '#000'];
-    const savedColor = localStorage.getItem('oo_player_color') || '#ff3366';
+    const colors = ['#ff3366', '#22c55e', '#3b82f6', '#f59e0b', '#8b5cf6', '#ff69b4', '#fff', '#000'];
+    const savedColor = getPartColor(selectedBodyPart);
 
     colorSwatchesContainer.innerHTML = colors.map((c) => `
       <div class="profile-color-swatch ${c === savedColor ? 'active' : ''}" data-color="${c}" style="background: ${c}" title="${c}"></div>
@@ -3000,8 +3062,33 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
         const color = (swatch as HTMLElement).dataset.color || '#ff3366';
         colorSwatchesContainer.querySelectorAll('.profile-color-swatch').forEach(s => s.classList.remove('active'));
         swatch.classList.add('active');
-        localStorage.setItem('oo_player_color', color);
-        document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color } }));
+
+        // Save and dispatch for the selected body part
+        localStorage.setItem(`oo_color_${selectedBodyPart}`, color);
+        document.dispatchEvent(new CustomEvent('oo:partcolor', { detail: { part: selectedBodyPart, color } }));
+
+        // Also update legacy player color if body is selected (for backwards compatibility)
+        if (selectedBodyPart === 'body') {
+          localStorage.setItem('oo_player_color', color);
+          document.dispatchEvent(new CustomEvent('oo:playercolor', { detail: { color } }));
+        }
+      });
+    });
+  }
+
+  // Body part toggle handlers
+  if (bodyPartToggles) {
+    bodyPartToggles.querySelectorAll('.part-toggle').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        // Update active state on toggles
+        bodyPartToggles.querySelectorAll('.part-toggle').forEach(t => t.classList.remove('active'));
+        toggle.classList.add('active');
+
+        // Update selected part
+        selectedBodyPart = (toggle as HTMLElement).dataset.part || 'body';
+
+        // Update active swatch to show current color for this part
+        updateActiveSwatchForPart(selectedBodyPart);
       });
     });
   }

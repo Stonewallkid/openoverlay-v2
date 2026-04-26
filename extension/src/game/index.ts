@@ -90,8 +90,13 @@ const NAP_DURATION = 10000; // Nap for 10 seconds
 const CHASE_DURATION = 3000; // Chase cursor for 3 seconds
 const CHASE_CHANCE = 0.001; // Chance per frame to start chasing (rare)
 
-// Player color
-let playerColor = localStorage.getItem('oo_player_color') || '#ffffff';
+// Player colors for different body parts
+let playerColor = localStorage.getItem('oo_player_color') || '#ffffff'; // Legacy/body color
+let headColor = localStorage.getItem('oo_color_head') || localStorage.getItem('oo_player_color') || '#ffffff';
+let bodyColor = localStorage.getItem('oo_color_body') || localStorage.getItem('oo_player_color') || '#ffffff';
+let faceColor = localStorage.getItem('oo_color_face') || '#ff69b4'; // Pink default for smudgy
+let hairColor = localStorage.getItem('oo_color_hair') || localStorage.getItem('oo_player_color') || '#ffffff';
+let dressColor = localStorage.getItem('oo_color_dress') || localStorage.getItem('oo_player_color') || '#ffffff';
 let playerHat = localStorage.getItem('oo_player_hat') || 'none';
 let playerAccessory = localStorage.getItem('oo_player_accessory') || 'none';
 
@@ -104,6 +109,20 @@ let customScreenName = localStorage.getItem('oo_screen_name') || '';
 // Available customization options
 const HATS = ['none', 'cap', 'tophat', 'crown', 'beanie', 'party'];
 const ACCESSORIES = ['none', 'glasses', 'sunglasses', 'mustache', 'beard', 'mask'];
+
+// Helper to darken a hex color by a percentage (0-1)
+function darkenColor(hex: string, amount: number): string {
+  // Handle shorthand hex
+  const fullHex = hex.replace(/^#?([a-f\d])([a-f\d])([a-f\d])$/i, (_, r, g, b) => r + r + g + g + b + b);
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(fullHex);
+  if (!result) return hex;
+
+  const r = Math.max(0, Math.round(parseInt(result[1], 16) * (1 - amount)));
+  const g = Math.max(0, Math.round(parseInt(result[2], 16) * (1 - amount)));
+  const b = Math.max(0, Math.round(parseInt(result[3], 16) * (1 - amount)));
+
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
 
 // Girl mode (longer hair + dress)
 let isGirlMode = localStorage.getItem('oo_player_girl') === 'true';
@@ -364,11 +383,39 @@ export function initGame(): void {
     }
   });
 
-  // Listen for player color changes
+  // Listen for player color changes (legacy - sets all parts)
   document.addEventListener('oo:playercolor', ((e: CustomEvent) => {
     playerColor = e.detail.color;
     localStorage.setItem('oo_player_color', playerColor);
-    render(); // Re-render to show new color
+    render();
+  }) as EventListener);
+
+  // Listen for body part color changes
+  document.addEventListener('oo:partcolor', ((e: CustomEvent) => {
+    const { part, color } = e.detail;
+    switch (part) {
+      case 'head':
+        headColor = color;
+        localStorage.setItem('oo_color_head', color);
+        break;
+      case 'body':
+        bodyColor = color;
+        localStorage.setItem('oo_color_body', color);
+        break;
+      case 'face':
+        faceColor = color;
+        localStorage.setItem('oo_color_face', color);
+        break;
+      case 'hair':
+        hairColor = color;
+        localStorage.setItem('oo_color_hair', color);
+        break;
+      case 'dress':
+        dressColor = color;
+        localStorage.setItem('oo_color_dress', color);
+        break;
+    }
+    render();
   }) as EventListener);
 
   // Listen for player style changes (girl mode)
@@ -2706,49 +2753,55 @@ function drawRemoteHat(centerX: number, headY: number, headRadius: number, hat: 
  * bodyColor: the color for the head outline (matches body)
  */
 function drawSmudgyFace(ctx: CanvasRenderingContext2D, centerX: number, headY: number, headRadius: number, lookDir: number, vy: number, onGround: boolean, bodyColor: string): void {
-  // Pink circle - always pink for Smudgy! (brand color)
-  // Reduced gap to 10% of original (was headRadius - 1, now headRadius - 0.1)
-  ctx.fillStyle = '#ff69b4';
+  // Completely disable shadow for pink face
+  ctx.save();
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+
+  // Big pink circle - fills most of the head (uses faceColor)
+  ctx.fillStyle = faceColor;
   ctx.beginPath();
-  ctx.arc(centerX, headY, headRadius - 0.1, 0, Math.PI * 2);
+  ctx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
   ctx.fill();
 
-  // Eye cutout position - use signed lookDir so eye is on correct side when stopped
-  // Negative lookDir = eye on left, positive = eye on right
-  const maxOffset = headRadius - 3;
-  const eyeOffsetX = lookDir * maxOffset; // Signed value!
+  // Thin darker outline around the face (darken the face color)
+  const darkerFaceColor = darkenColor(faceColor, 0.2);
+  ctx.strokeStyle = darkerFaceColor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
+  ctx.stroke();
 
-  // Vertical offset - look UP when jumping (almost straight up with slight angle)
+  // Eye cutout position
+  const maxOffset = headRadius - 3;
+  const eyeOffsetX = lookDir * maxOffset;
+
+  // Vertical offset - look UP when jumping
   let eyeOffsetY = 0;
-  let jumpingEyeXReduction = 1; // Multiplier to reduce X offset when looking up
+  let jumpingEyeXReduction = 1;
   if (!onGround) {
     if (vy < -2) {
-      eyeOffsetY = -4; // Looking up high while jumping
-      jumpingEyeXReduction = 0.3; // Move eye more toward center when looking up
+      eyeOffsetY = -4;
+      jumpingEyeXReduction = 0.3;
     } else if (vy > 2) {
-      eyeOffsetY = 1; // Slight look down when falling
+      eyeOffsetY = 1;
     }
   } else if (Math.abs(lookDir) > 0.3) {
-    eyeOffsetY = 1; // Slightly down when looking to the side
+    eyeOffsetY = 1;
   }
 
   const cutoutRadius = headRadius - 4;
   const finalEyeOffsetX = eyeOffsetX * jumpingEyeXReduction;
 
-  // Cut out the eye hole using destination-out (transparent hole)
-  ctx.save();
+  // Cut out the eye hole
   ctx.globalCompositeOperation = 'destination-out';
   ctx.beginPath();
   ctx.arc(centerX + finalEyeOffsetX, headY + eyeOffsetY, cutoutRadius, 0, Math.PI * 2);
   ctx.fill();
-  ctx.restore();
 
-  // Redraw head outline ON TOP so it covers any cutout bleeding past the edge
-  ctx.strokeStyle = bodyColor;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.restore();
 }
 
 function drawPlayer(): void {
@@ -2791,7 +2844,7 @@ function drawPlayer(): void {
   const bodyStartY = headY + headRadius;
   const bodyEndY = bodyStartY + bodyLength;
 
-  gameCtx.strokeStyle = playerColor;
+  gameCtx.strokeStyle = bodyColor;
   gameCtx.lineWidth = 3;
   gameCtx.lineCap = 'round';
   gameCtx.lineJoin = 'round';
@@ -2808,7 +2861,7 @@ function drawPlayer(): void {
     const hairWiggle = Math.sin(player.animFrame * Math.PI * 2) * 3;
 
     // 1. Draw hair first (back layer)
-    gameCtx.fillStyle = playerColor;
+    gameCtx.fillStyle = hairColor;
     gameCtx.beginPath();
 
     if (isMoving) {
@@ -2848,14 +2901,14 @@ function drawPlayer(): void {
     gameCtx.beginPath();
     gameCtx.arc(centerX, headY, headRadius - 0.5, 0, Math.PI * 2);
     gameCtx.stroke();
-    // Then white fill
-    gameCtx.fillStyle = '#fff';
+    // Then head fill
+    gameCtx.fillStyle = headColor;
     gameCtx.beginPath();
     gameCtx.arc(centerX, headY, headRadius - 1, 0, Math.PI * 2);
     gameCtx.fill();
 
     // 3. Draw bangs on top of face
-    gameCtx.fillStyle = playerColor;
+    gameCtx.fillStyle = hairColor;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX - headRadius + 2, headY - 2);
     gameCtx.quadraticCurveTo(centerX - 2, headY - headRadius - 2, centerX, headY - headRadius + 1);
@@ -2866,9 +2919,9 @@ function drawPlayer(): void {
 
     // 4. Face features (on white face)
     if (faceStyle === 'smudgy') {
-      drawSmudgyFace(gameCtx, centerX, headY, headRadius, eyeLookDirection, player.vy, player.onGround, playerColor);
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, eyeLookDirection, player.vy, player.onGround, headColor);
     } else {
-      gameCtx.fillStyle = playerColor;
+      gameCtx.fillStyle = bodyColor;
       if (isMoving) {
         // Running: single side eye + small mouth dash
         gameCtx.beginPath();
@@ -2899,7 +2952,7 @@ function drawPlayer(): void {
     }
 
     // 5. Dress body - solid triangle (scaled 75%)
-    gameCtx.fillStyle = playerColor;
+    gameCtx.fillStyle = dressColor;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyStartY);
     gameCtx.lineTo(centerX - 8, bodyEndY + 1);
@@ -2930,7 +2983,7 @@ function drawPlayer(): void {
         drawPath();
         gameCtx.stroke();
         // Main color
-        gameCtx.strokeStyle = playerColor;
+        gameCtx.strokeStyle = hairColor;
         gameCtx.lineWidth = 2.5;
         drawPath();
         gameCtx.stroke();
@@ -2974,28 +3027,15 @@ function drawPlayer(): void {
         });
       }
 
-      // Now draw head circle (on top of hair) with thin outline
-      // White outline first (outermost)
-      gameCtx.strokeStyle = '#fff';
-      gameCtx.lineWidth = 3.6;
-      gameCtx.beginPath();
-      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
-      gameCtx.stroke();
-      // Thin black outline inside white
-      gameCtx.strokeStyle = '#000';
-      gameCtx.lineWidth = 3.3;
-      gameCtx.beginPath();
-      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
-      gameCtx.stroke();
-      // Main color (innermost)
-      gameCtx.strokeStyle = playerColor;
-      gameCtx.lineWidth = 3;
-      gameCtx.beginPath();
-      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
-      gameCtx.stroke();
+      // Draw Smudgy face first (pink with eye cutout), THEN white outline on top
+      drawSmudgyFace(gameCtx, centerX, headY, headRadius, eyeLookDirection, player.vy, player.onGround, headColor);
 
-      // Draw Smudgy face (pink circle with transparent cutout)
-      drawSmudgyFace(gameCtx, centerX, headY, headRadius, eyeLookDirection, player.vy, player.onGround, playerColor);
+      // White outline AFTER pink/cutout so it's not affected by destination-out
+      gameCtx.strokeStyle = '#fff';
+      gameCtx.lineWidth = 2;
+      gameCtx.beginPath();
+      gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      gameCtx.stroke();
     } else {
       // Head circle for non-smudgy style
       gameCtx.beginPath();
@@ -3003,7 +3043,7 @@ function drawPlayer(): void {
       gameCtx.stroke();
 
       // Hair - marker tip style (scaled 75%)
-      gameCtx.fillStyle = playerColor;
+      gameCtx.fillStyle = hairColor;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX - 6, headY - headRadius + 1);
       gameCtx.lineTo(centerX - 3, headY - headRadius - 4);
@@ -3014,7 +3054,7 @@ function drawPlayer(): void {
       gameCtx.stroke();
 
       // Face
-      gameCtx.fillStyle = playerColor;
+      gameCtx.fillStyle = bodyColor;
       if (isMoving) {
         // Running: single side eye + mouth dash
         gameCtx.beginPath();
@@ -3054,7 +3094,7 @@ function drawPlayer(): void {
     gameCtx.lineTo(centerX, bodyEndY);
     gameCtx.stroke();
     // Main color (innermost)
-    gameCtx.strokeStyle = playerColor;
+    gameCtx.strokeStyle = bodyColor;
     gameCtx.lineWidth = 3;
     gameCtx.beginPath();
     gameCtx.moveTo(centerX, bodyStartY);
@@ -3107,7 +3147,7 @@ function drawPlayer(): void {
     gameCtx.lineTo(endX, endY);
     gameCtx.stroke();
     // Main color (innermost)
-    gameCtx.strokeStyle = playerColor;
+    gameCtx.strokeStyle = bodyColor;
     gameCtx.lineWidth = 3;
     gameCtx.beginPath();
     gameCtx.moveTo(startX, startY);
@@ -3152,7 +3192,7 @@ function drawPlayer(): void {
       gameCtx.moveTo(centerX, shoulderY);
       gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
       gameCtx.stroke();
-      gameCtx.strokeStyle = playerColor;
+      gameCtx.strokeStyle = bodyColor;
       gameCtx.lineWidth = 3;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX, shoulderY);
@@ -3171,51 +3211,62 @@ function drawPlayer(): void {
       gameCtx.moveTo(centerX, shoulderY);
       gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
       gameCtx.stroke();
-      gameCtx.strokeStyle = playerColor;
+      gameCtx.strokeStyle = bodyColor;
       gameCtx.lineWidth = 3;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX, shoulderY);
       gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
       gameCtx.stroke();
     } else {
-      // Boy standing: arms out to the sides (same as girl, looks better)
-      // Left arm (white outside, thin black inside)
+      // Boy standing: hands on waist pose (arms angle out then down to hips)
+      const waistY = bodyEndY - 2; // Just above where legs start
+      const elbowOutX = 7; // How far elbow sticks out
+      const elbowY = shoulderY + 5; // Elbow height
+      const handInX = 4; // How far in the hand is (on waist)
+
+      // Left arm with outline
       gameCtx.strokeStyle = '#fff';
       gameCtx.lineWidth = 3.6;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.lineTo(centerX - elbowOutX, elbowY);
+      gameCtx.lineTo(centerX - handInX, waistY);
       gameCtx.stroke();
       gameCtx.strokeStyle = '#000';
       gameCtx.lineWidth = 3.3;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.lineTo(centerX - elbowOutX, elbowY);
+      gameCtx.lineTo(centerX - handInX, waistY);
       gameCtx.stroke();
-      gameCtx.strokeStyle = playerColor;
+      gameCtx.strokeStyle = bodyColor;
       gameCtx.lineWidth = 3;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX - limbLength, shoulderY + 2);
+      gameCtx.lineTo(centerX - elbowOutX, elbowY);
+      gameCtx.lineTo(centerX - handInX, waistY);
       gameCtx.stroke();
-      // Right arm (white outside, thin black inside)
+      // Right arm with outline
       gameCtx.strokeStyle = '#fff';
       gameCtx.lineWidth = 3.6;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.lineTo(centerX + elbowOutX, elbowY);
+      gameCtx.lineTo(centerX + handInX, waistY);
       gameCtx.stroke();
       gameCtx.strokeStyle = '#000';
       gameCtx.lineWidth = 3.3;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.lineTo(centerX + elbowOutX, elbowY);
+      gameCtx.lineTo(centerX + handInX, waistY);
       gameCtx.stroke();
-      gameCtx.strokeStyle = playerColor;
+      gameCtx.strokeStyle = bodyColor;
       gameCtx.lineWidth = 3;
       gameCtx.beginPath();
       gameCtx.moveTo(centerX, shoulderY);
-      gameCtx.lineTo(centerX + limbLength, shoulderY + 2);
+      gameCtx.lineTo(centerX + elbowOutX, elbowY);
+      gameCtx.lineTo(centerX + handInX, waistY);
       gameCtx.stroke();
     }
   }
@@ -3237,7 +3288,7 @@ function drawPlayer(): void {
     gameCtx.lineTo(x2, y2);
     gameCtx.stroke();
     // Main color (innermost)
-    gameCtx.strokeStyle = playerColor;
+    gameCtx.strokeStyle = bodyColor;
     gameCtx.lineWidth = 3;
     gameCtx.beginPath();
     gameCtx.moveTo(x1, y1);
