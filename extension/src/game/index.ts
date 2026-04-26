@@ -55,7 +55,7 @@ let player: Player = {
   vx: 0,
   vy: 0,
   width: 23,   // 75% of original 30
-  height: 38,  // 75% of original 50
+  height: 41,  // Adjusted to match actual character height (head + body + legs)
   onGround: false,
   facingRight: true,
   animFrame: 0,
