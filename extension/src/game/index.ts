@@ -3030,8 +3030,8 @@ function drawPlayer(): void {
       // Draw Smudgy face first (pink with eye cutout), THEN white outline on top
       drawSmudgyFace(gameCtx, centerX, headY, headRadius, eyeLookDirection, player.vy, player.onGround, headColor);
 
-      // White outline AFTER pink/cutout so it's not affected by destination-out
-      gameCtx.strokeStyle = '#fff';
+      // Head outline AFTER pink/cutout so it's not affected by destination-out
+      gameCtx.strokeStyle = headColor;
       gameCtx.lineWidth = 2;
       gameCtx.beginPath();
       gameCtx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
