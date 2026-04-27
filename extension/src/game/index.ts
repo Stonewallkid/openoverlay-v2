@@ -24,6 +24,23 @@ import {
   type CourseData,
 } from '@/db';
 import { getCurrentUser } from '@/auth';
+import {
+  initHome,
+  getHomeBounds,
+  isInsideHome,
+  getHomeRestPosition,
+  smudgyEnteredHome,
+  smudgyLeftHome,
+  isSmudgyInHome,
+  setFurniture,
+  getFurniture,
+  getAvailableFurniture,
+  showHome,
+  hideHome,
+  toggleHome,
+  isHomeVisible,
+  type HomeFurniture,
+} from '@/home';
 
 // Game state
 let gameCanvas: HTMLCanvasElement | null = null;
@@ -77,7 +94,8 @@ const IDLE_WAVE_DELAY = 120000; // Start waving after 2 minutes of no movement
 const WAVE_DURATION = 2000; // Wave for 2 seconds
 
 // Idle fidget animations (shorter delays, random behaviors)
-type IdleAnimType = 'none' | 'headScratch' | 'buttScratch' | 'weightShift' | 'lookAround';
+type IdleAnimType = 'none' | 'headScratch' | 'buttScratch' | 'weightShift' | 'lookAround'
+  | 'sitDown' | 'layDown' | 'pushups' | 'jumpingJacks' | 'stretch' | 'wander';
 let currentIdleAnim: IdleAnimType = 'none';
 let idleAnimFrame = 0;
 let idleAnimStartTime = 0;
@@ -85,6 +103,19 @@ let nextIdleAnimTime = 0; // When to trigger next idle animation
 const IDLE_ANIM_MIN_DELAY = 30000; // At least 30 seconds between fidgets
 const IDLE_ANIM_MAX_DELAY = 90000; // At most 90 seconds between fidgets
 const IDLE_ANIM_DURATION = 1500; // Each fidget lasts 1.5 seconds
+
+// Extended idle state for longer animations
+let isDoingExtendedIdle = false;
+let extendedIdleType: IdleAnimType = 'none';
+let extendedIdleStartTime = 0;
+const EXTENDED_IDLE_DELAY = 45000; // After 45 seconds of no input, do extended idle
+const EXTENDED_IDLE_DURATION_MIN = 5000; // At least 5 seconds
+const EXTENDED_IDLE_DURATION_MAX = 15000; // At most 15 seconds
+
+// Wander state
+let wanderTargetX = 0;
+let wanderDirection = 1;
+const WANDER_SPEED = 1.5;
 
 // Standing pose variation (based on a random seed per session)
 const standingPoseSeed = Math.random();
@@ -573,6 +604,19 @@ export function initGame(): void {
 
   // Initialize lastDrawTime
   lastDrawTime = performance.now();
+
+  // Initialize Smudgy's Home
+  initHome();
+
+  // Listen for home furniture changes
+  document.addEventListener('oo:homefurniture', ((e: CustomEvent) => {
+    setFurniture(e.detail.furniture as HomeFurniture);
+  }) as EventListener);
+
+  // Listen for home visibility toggle
+  document.addEventListener('oo:togglehome', () => {
+    toggleHome();
+  });
 
   console.log('[OpenOverlay] Game initialized');
 }
@@ -1427,7 +1471,7 @@ function update(dt: number): void {
     }
 
     // Short idle fidget animations (head scratch, butt scratch, etc.)
-    if (!isWaving && currentIdleAnim === 'none' && now > nextIdleAnimTime && idleTime > 1000) {
+    if (!isWaving && !isDoingExtendedIdle && currentIdleAnim === 'none' && now > nextIdleAnimTime && idleTime > 1000) {
       // Pick a random idle animation
       const anims: IdleAnimType[] = ['headScratch', 'buttScratch', 'weightShift', 'lookAround'];
       currentIdleAnim = anims[Math.floor(Math.random() * anims.length)];
@@ -1446,12 +1490,56 @@ function update(dt: number): void {
         nextIdleAnimTime = now + IDLE_ANIM_MIN_DELAY + Math.random() * (IDLE_ANIM_MAX_DELAY - IDLE_ANIM_MIN_DELAY);
       }
     }
+
+    // Extended idle behaviors (sitting, laying down, exercise, etc.)
+    if (!isDoingExtendedIdle && idleTime > EXTENDED_IDLE_DELAY && currentIdleAnim === 'none' && !isWaving) {
+      // Start an extended idle behavior
+      const extendedAnims: IdleAnimType[] = ['sitDown', 'layDown', 'pushups', 'jumpingJacks', 'stretch', 'wander'];
+      extendedIdleType = extendedAnims[Math.floor(Math.random() * extendedAnims.length)];
+      isDoingExtendedIdle = true;
+      extendedIdleStartTime = now;
+      idleAnimFrame = 0;
+
+      // If wandering, pick a target
+      if (extendedIdleType === 'wander') {
+        wanderDirection = Math.random() > 0.5 ? 1 : -1;
+        wanderTargetX = player.x + wanderDirection * (50 + Math.random() * 100);
+        // Keep within screen bounds
+        wanderTargetX = Math.max(50, Math.min(window.innerWidth - 50, wanderTargetX));
+      }
+    }
+
+    // Update extended idle
+    if (isDoingExtendedIdle) {
+      idleAnimFrame += 0.1;
+      const extendedDuration = EXTENDED_IDLE_DURATION_MIN + Math.random() * (EXTENDED_IDLE_DURATION_MAX - EXTENDED_IDLE_DURATION_MIN);
+
+      // Handle wander movement
+      if (extendedIdleType === 'wander') {
+        const dist = wanderTargetX - player.x;
+        if (Math.abs(dist) > 5) {
+          player.x += Math.sign(dist) * WANDER_SPEED;
+          player.facingRight = dist > 0;
+          player.animFrame += 0.15; // Walking animation
+        }
+      }
+
+      if (now - extendedIdleStartTime > extendedDuration) {
+        // Extended idle finished
+        isDoingExtendedIdle = false;
+        extendedIdleType = 'none';
+        idleAnimFrame = 0;
+        lastMoveTime = now; // Reset idle timer
+      }
+    }
   } else {
     // Moving - reset all idle states
     isWaving = false;
     waveFrame = 0;
     currentIdleAnim = 'none';
     idleAnimFrame = 0;
+    isDoingExtendedIdle = false;
+    extendedIdleType = 'none';
   }
 
   // Double jump logic - only trigger on key press, not hold
@@ -2904,8 +2992,300 @@ function drawSmudgyFace(ctx: CanvasRenderingContext2D, centerX: number, headY: n
   ctx.restore();
 }
 
+/**
+ * Draw extended idle poses (sitting, laying down, exercises, etc.)
+ * Returns true if it drew the player, false if normal drawing should continue
+ */
+function drawExtendedIdlePose(): boolean {
+  if (!isDoingExtendedIdle || !gameCtx) return false;
+
+  const ctx = gameCtx;
+  const x = player.x;
+  const y = player.y;
+  const w = player.width;
+  const centerX = x + w / 2;
+
+  // Stick figure dimensions
+  const headRadius = 7;
+  const bodyLength = 13;
+  const limbLength = 11;
+
+  ctx.save();
+  ctx.strokeStyle = bodyColor;
+  ctx.fillStyle = headColor;
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 4;
+
+  const progress = idleAnimFrame;
+  const cycle = Math.sin(progress * 2);
+
+  switch (extendedIdleType) {
+    case 'sitDown': {
+      // Sitting on ground pose
+      const groundY = y + player.height;
+      const sittingY = groundY - 10;
+
+      // Head (lowered)
+      ctx.beginPath();
+      ctx.arc(centerX, sittingY - 15, headRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Draw Smudgy face
+      if (faceStyle === 'smudgy') {
+        drawSmudgyFace(ctx, centerX, sittingY - 15, headRadius, 0, 0, true, headColor);
+      }
+
+      // Body (leaning back slightly)
+      ctx.beginPath();
+      ctx.moveTo(centerX, sittingY - 8);
+      ctx.lineTo(centerX - 3, sittingY + 5);
+      ctx.stroke();
+
+      // Arms resting on knees
+      ctx.beginPath();
+      ctx.moveTo(centerX - 3, sittingY);
+      ctx.lineTo(centerX - 10, sittingY + 8);
+      ctx.lineTo(centerX - 8, sittingY + 15);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX - 3, sittingY);
+      ctx.lineTo(centerX + 5, sittingY + 8);
+      ctx.lineTo(centerX + 3, sittingY + 15);
+      ctx.stroke();
+
+      // Legs bent
+      ctx.beginPath();
+      ctx.moveTo(centerX - 3, sittingY + 5);
+      ctx.lineTo(centerX - 12, sittingY + 10);
+      ctx.lineTo(centerX - 8, sittingY + 18);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX - 3, sittingY + 5);
+      ctx.lineTo(centerX + 8, sittingY + 10);
+      ctx.lineTo(centerX + 3, sittingY + 18);
+      ctx.stroke();
+      break;
+    }
+
+    case 'layDown': {
+      // Laying down with ZZZs
+      const groundY = y + player.height;
+      const layY = groundY - 5;
+
+      // Body horizontal
+      ctx.beginPath();
+      ctx.moveTo(centerX - 20, layY);
+      ctx.lineTo(centerX + 5, layY);
+      ctx.stroke();
+
+      // Head (sideways)
+      ctx.beginPath();
+      ctx.arc(centerX - 25, layY - 3, headRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Closed eyes (sleeping)
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(centerX - 28, layY - 4);
+      ctx.lineTo(centerX - 24, layY - 4);
+      ctx.stroke();
+      ctx.strokeStyle = bodyColor;
+      ctx.lineWidth = 3;
+
+      // Arms tucked
+      ctx.beginPath();
+      ctx.moveTo(centerX - 15, layY);
+      ctx.lineTo(centerX - 18, layY - 6);
+      ctx.stroke();
+
+      // Legs straight
+      ctx.beginPath();
+      ctx.moveTo(centerX + 5, layY);
+      ctx.lineTo(centerX + 15, layY + 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX + 5, layY);
+      ctx.lineTo(centerX + 15, layY - 2);
+      ctx.stroke();
+
+      // Draw ZZZs
+      ctx.fillStyle = 'rgba(100, 100, 255, 0.8)';
+      ctx.font = 'bold 12px sans-serif';
+      const zzOffset = Math.sin(progress) * 3;
+      ctx.fillText('Z', centerX - 30 + zzOffset, layY - 20);
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('z', centerX - 25 + zzOffset * 1.2, layY - 28);
+      ctx.font = 'bold 8px sans-serif';
+      ctx.fillText('z', centerX - 22 + zzOffset * 1.4, layY - 34);
+      break;
+    }
+
+    case 'pushups': {
+      // Pushup pose - goes up and down
+      const groundY = y + player.height;
+      const pushupPhase = Math.sin(progress * 3);
+      const bodyHeight = 8 + pushupPhase * 6; // 8-14 from ground
+
+      // Body horizontal
+      ctx.beginPath();
+      ctx.moveTo(centerX - 15, groundY - bodyHeight);
+      ctx.lineTo(centerX + 15, groundY - bodyHeight - 2);
+      ctx.stroke();
+
+      // Head
+      ctx.beginPath();
+      ctx.arc(centerX - 20, groundY - bodyHeight - 5, headRadius - 1, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Arms (pushing up/down)
+      const armBend = 0.3 + pushupPhase * 0.4;
+      ctx.beginPath();
+      ctx.moveTo(centerX - 8, groundY - bodyHeight);
+      ctx.lineTo(centerX - 8 - 4, groundY - bodyHeight + 5 - pushupPhase * 3);
+      ctx.lineTo(centerX - 8 - 2, groundY - 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX + 5, groundY - bodyHeight);
+      ctx.lineTo(centerX + 5 + 4, groundY - bodyHeight + 5 - pushupPhase * 3);
+      ctx.lineTo(centerX + 5 + 2, groundY - 2);
+      ctx.stroke();
+
+      // Legs straight back
+      ctx.beginPath();
+      ctx.moveTo(centerX + 15, groundY - bodyHeight - 2);
+      ctx.lineTo(centerX + 28, groundY - 3);
+      ctx.stroke();
+
+      // Sweat drops when effort
+      if (pushupPhase < -0.3) {
+        ctx.fillStyle = 'rgba(100, 200, 255, 0.7)';
+        ctx.beginPath();
+        ctx.arc(centerX - 25, groundY - bodyHeight - 12, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+
+    case 'jumpingJacks': {
+      // Jumping jacks - arms and legs spread/together
+      const groundY = y + player.height;
+      const jackPhase = Math.sin(progress * 4);
+      const isOpen = jackPhase > 0;
+
+      // Body stays centered
+      const bodyY = groundY - 25 - (isOpen ? 3 : 0); // Slight jump when open
+
+      // Head
+      ctx.beginPath();
+      ctx.arc(centerX, bodyY - 12, headRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (faceStyle === 'smudgy') {
+        drawSmudgyFace(ctx, centerX, bodyY - 12, headRadius, 0, 0, true, headColor);
+      }
+
+      // Body
+      ctx.beginPath();
+      ctx.moveTo(centerX, bodyY - 5);
+      ctx.lineTo(centerX, bodyY + 10);
+      ctx.stroke();
+
+      // Arms
+      const armSpread = isOpen ? 0.8 : 0.1;
+      ctx.beginPath();
+      ctx.moveTo(centerX, bodyY);
+      ctx.lineTo(centerX - 12 * armSpread - 3, bodyY - 10 * armSpread + 8);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX, bodyY);
+      ctx.lineTo(centerX + 12 * armSpread + 3, bodyY - 10 * armSpread + 8);
+      ctx.stroke();
+
+      // Legs
+      const legSpread = isOpen ? 12 : 3;
+      ctx.beginPath();
+      ctx.moveTo(centerX, bodyY + 10);
+      ctx.lineTo(centerX - legSpread, groundY - 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX, bodyY + 10);
+      ctx.lineTo(centerX + legSpread, groundY - 2);
+      ctx.stroke();
+      break;
+    }
+
+    case 'stretch': {
+      // Stretching arms up high
+      const groundY = y + player.height;
+      const stretchPhase = Math.sin(progress * 1.5);
+      const armHeight = 20 + stretchPhase * 8;
+
+      // Head (tilted back slightly when stretching)
+      const headY = groundY - 35 - stretchPhase * 5;
+      ctx.beginPath();
+      ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (faceStyle === 'smudgy') {
+        drawSmudgyFace(ctx, centerX, headY, headRadius, 0, 0, true, headColor);
+      }
+
+      // Body
+      ctx.beginPath();
+      ctx.moveTo(centerX, headY + headRadius);
+      ctx.lineTo(centerX, groundY - 12);
+      ctx.stroke();
+
+      // Arms stretched up
+      ctx.beginPath();
+      ctx.moveTo(centerX, headY + headRadius + 2);
+      ctx.lineTo(centerX - 8, headY - armHeight + 15);
+      ctx.lineTo(centerX - 6, headY - armHeight);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX, headY + headRadius + 2);
+      ctx.lineTo(centerX + 8, headY - armHeight + 15);
+      ctx.lineTo(centerX + 6, headY - armHeight);
+      ctx.stroke();
+
+      // Legs standing
+      ctx.beginPath();
+      ctx.moveTo(centerX, groundY - 12);
+      ctx.lineTo(centerX - 4, groundY - 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(centerX, groundY - 12);
+      ctx.lineTo(centerX + 4, groundY - 2);
+      ctx.stroke();
+      break;
+    }
+
+    case 'wander': {
+      // Wandering is handled by normal walking animation with slow speed
+      ctx.restore();
+      return false; // Let normal drawing handle it
+    }
+
+    default:
+      ctx.restore();
+      return false;
+  }
+
+  ctx.restore();
+  return true;
+}
+
 function drawPlayer(): void {
   if (!gameCtx) return;
+
+  // Check for extended idle poses first
+  if (drawExtendedIdlePose()) {
+    return; // Extended pose was drawn, skip normal drawing
+  }
 
   const x = player.x;
   const y = player.y;
@@ -4597,3 +4977,19 @@ export function isInTagMode(): boolean {
 export function isCurrentPlayerIt(): boolean {
   return isTagMode && isCurrentUserIt();
 }
+
+// ============ SMUDGY'S HOME EXPORTS ============
+
+export {
+  showHome,
+  hideHome,
+  toggleHome,
+  isHomeVisible,
+  setFurniture,
+  getFurniture,
+  getAvailableFurniture,
+  getHomeBounds,
+  isInsideHome,
+} from '@/home';
+
+export type { HomeFurniture } from '@/home';
