@@ -1732,7 +1732,208 @@ const STYLES = `
     width: 20px;
     height: 20px;
   }
+
+  .help-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: transparent;
+    color: #ff69b4;
+    border: 2px solid #ff69b4;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    margin-top: 12px;
+    transition: all 0.2s;
+  }
+
+  .help-btn:hover {
+    background: #ff69b4;
+    color: white;
+  }
+
+  .help-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 10000;
+    display: none;
+    padding: 20px;
+  }
+
+  .help-modal.show {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  .help-content {
+    position: relative;
+    max-width: 600px;
+    width: 100%;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+    background: #1a1a2e;
+    border-radius: 16px;
+    padding: 24px;
+    padding-top: 50px;
+    padding-bottom: 40px;
+    color: white;
+    font-family: system-ui, sans-serif;
+    margin-top: 20px;
+  }
+
+  .help-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: #333;
+    border: none;
+    color: white;
+    font-size: 24px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+
+  .help-close:hover {
+    background: #ff69b4;
+  }
+
+  .help-title {
+    font-size: 24px;
+    font-weight: bold;
+    color: #ff69b4;
+    margin: 0 0 20px 0;
+    text-align: center;
+  }
+
+  .help-section {
+    margin-bottom: 24px;
+  }
+
+  .help-section-title {
+    font-size: 16px;
+    font-weight: bold;
+    color: #ff69b4;
+    margin: 0 0 12px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .help-section-content {
+    font-size: 14px;
+    line-height: 1.6;
+    color: #ccc;
+  }
+
+  .help-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px 16px;
+    margin-top: 8px;
+  }
+
+  .help-key {
+    font-weight: bold;
+    color: white;
+    background: #333;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  .help-value {
+    color: #aaa;
+  }
+
+  .help-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .help-button-item {
+    background: #2a2a3e;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+
+  .help-button-icon {
+    margin-right: 4px;
+  }
 `;
+
+// Sign-in reminder constants
+const SIGNIN_REMINDER_KEY = 'oo_signin_reminder_last';
+const SIGNIN_REMINDER_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours in ms
+
+/**
+ * Show a sign-in reminder notification
+ */
+function showSignInReminder(message: string): void {
+  // Create a temporary notification element
+  const notification = document.createElement('div');
+  notification.style.cssText = `
+    position: fixed;
+    top: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-family: system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 2147483647;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    animation: slideDown 0.3s ease;
+  `;
+  notification.textContent = message + ' - Click the profile button to sign in';
+  document.body.appendChild(notification);
+
+  setTimeout(() => {
+    notification.style.opacity = '0';
+    notification.style.transition = 'opacity 0.3s';
+    setTimeout(() => notification.remove(), 300);
+  }, 3000);
+}
+
+/**
+ * Check if we should show a periodic sign-in reminder
+ */
+function checkPeriodicSignInReminder(): void {
+  const user = getCurrentUser();
+  if (user) return; // Already signed in
+
+  const lastReminder = localStorage.getItem(SIGNIN_REMINDER_KEY);
+  const now = Date.now();
+
+  if (!lastReminder || (now - parseInt(lastReminder, 10)) > SIGNIN_REMINDER_INTERVAL) {
+    // Show reminder after a short delay so it doesn't appear immediately on page load
+    setTimeout(() => {
+      const currentUser = getCurrentUser();
+      if (!currentUser) {
+        showSignInReminder('Sign in to share drawings with others');
+        localStorage.setItem(SIGNIN_REMINDER_KEY, now.toString());
+      }
+    }, 10000); // 10 second delay
+  }
+}
 
 /**
  * Initialize the UI
@@ -1981,6 +2182,7 @@ export function initUI(): void {
     <button class="profile-close" id="profile-close-btn">&times;</button>
     <div class="login-prompt" id="login-prompt">
       <p>Sign in to save your drawings and follow other users +many more features</p>
+      <button class="help-btn" id="help-btn-login">📖 How to Use</button>
       <button class="login-btn" id="google-login-btn">
         <svg width="20" height="20" viewBox="0 0 24 24">
           <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -2069,6 +2271,17 @@ export function initUI(): void {
           </select>
         </div>
         <div class="profile-setting-row">
+          <span class="profile-setting-label">Face</span>
+          <select class="profile-select" id="profile-accessory-select">
+            <option value="none">None</option>
+            <option value="glasses">👓 Glasses</option>
+            <option value="sunglasses">🕶️ Sunglasses</option>
+            <option value="mustache">🥸 Mustache</option>
+            <option value="beard">🧔 Beard</option>
+            <option value="mask">😷 Mask</option>
+          </select>
+        </div>
+        <div class="profile-setting-row">
           <span class="profile-setting-label">Respawn in explore</span>
           <div class="toggle-switch active" id="toggle-respawn" title="Respawn when falling off screen"></div>
         </div>
@@ -2128,11 +2341,140 @@ export function initUI(): void {
         </div>
       </div>
       <div class="profile-actions">
+        <button class="help-btn" id="help-btn-profile">📖 How to Use</button>
         <button class="profile-btn danger" id="signout-btn">Sign Out</button>
       </div>
     </div>
   `;
   shadowRoot.appendChild(profileModal);
+
+  // Create help modal (outside Shadow DOM for proper event handling)
+  const helpModal = document.createElement('div');
+  helpModal.id = 'oo-help-modal';
+  helpModal.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.9);
+    z-index: 2147483647;
+    display: none;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 20px;
+    font-family: system-ui, -apple-system, sans-serif;
+  `;
+  helpModal.innerHTML = `
+    <div id="oo-help-content" style="
+      position: relative;
+      max-width: 600px;
+      width: 100%;
+      max-height: calc(100vh - 80px);
+      overflow-y: auto;
+      background: #1a1a2e;
+      border-radius: 16px;
+      padding: 24px;
+      padding-top: 50px;
+      padding-bottom: 40px;
+      color: white;
+      margin-top: 20px;
+    ">
+      <button id="oo-help-close" style="
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        background: #444;
+        border: none;
+        color: white;
+        font-size: 20px;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      ">&times;</button>
+      <h1 style="font-size: 24px; font-weight: bold; color: #ff69b4; margin: 0 0 20px 0; text-align: center;">📖 How to Use OpenOverlay</h1>
+
+      <div style="margin-bottom: 24px;">
+        <h2 style="font-size: 16px; font-weight: bold; color: #ff69b4; margin: 0 0 12px 0;">🎯 Getting Started</h2>
+        <div style="font-size: 14px; line-height: 1.6; color: #ccc;">
+          Click the pink Smudgy button in the bottom-right corner to open the menu. You'll see 4 buttons for different features.
+        </div>
+      </div>
+
+      <div style="margin-bottom: 24px;">
+        <h2 style="font-size: 16px; font-weight: bold; color: #ff69b4; margin: 0 0 12px 0;">✏️ Draw Mode</h2>
+        <div style="font-size: 14px; line-height: 1.6; color: #ccc;">
+          Draw on any webpage! Your drawings become platforms your character can walk on.
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+            <span style="background: #2a2a3e; padding: 6px 12px; border-radius: 6px; font-size: 13px;">● Solid</span>
+            <span style="background: #2a2a3e; padding: 6px 12px; border-radius: 6px; font-size: 13px;">○ Outline</span>
+            <span style="background: #2a2a3e; padding: 6px 12px; border-radius: 6px; font-size: 13px;">••• Dots</span>
+            <span style="background: #2a2a3e; padding: 6px 12px; border-radius: 6px; font-size: 13px;">≋ Spray</span>
+            <span style="background: #2a2a3e; padding: 6px 12px; border-radius: 6px; font-size: 13px;">～ Glow</span>
+          </div>
+          <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin-top: 12px;">
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">🧹</span><span style="color: #aaa;">Eraser</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">⬇️</span><span style="color: #aaa;">Draw behind character</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">⬆️</span><span style="color: #aaa;">Draw in front of character</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom: 24px;">
+        <h2 style="font-size: 16px; font-weight: bold; color: #ff69b4; margin: 0 0 12px 0;">📝 Text Mode</h2>
+        <div style="font-size: 14px; line-height: 1.6; color: #ccc;">
+          Add text stickers and emojis to any page! Click anywhere to place your text.
+          <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin-top: 8px;">
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">😀</span><span style="color: #aaa;">Open emoji picker</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">B / I</span><span style="color: #aaa;">Bold / Italic text</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom: 24px;">
+        <h2 style="font-size: 16px; font-weight: bold; color: #ff69b4; margin: 0 0 12px 0;">🎮 Game Mode</h2>
+        <div style="font-size: 14px; line-height: 1.6; color: #ccc;">
+          Spawn your character and play! Walk on the drawings you create.
+          <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin-top: 8px;">
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">A / ←</span><span style="color: #aaa;">Move left</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">D / →</span><span style="color: #aaa;">Move right</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">W / Space</span><span style="color: #aaa;">Jump</span>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;">
+            <span style="background: #2a2a3e; padding: 6px 12px; border-radius: 6px; font-size: 13px;">👥 Multiplayer</span>
+            <span style="background: #2a2a3e; padding: 6px 12px; border-radius: 6px; font-size: 13px;">🏷️ Tag Game</span>
+            <span style="background: #2a2a3e; padding: 6px 12px; border-radius: 6px; font-size: 13px;">🏃 Race Mode</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom: 24px;">
+        <h2 style="font-size: 16px; font-weight: bold; color: #ff69b4; margin: 0 0 12px 0;">🏗️ Build Race Courses</h2>
+        <div style="font-size: 14px; line-height: 1.6; color: #ccc;">
+          Create custom race tracks with obstacles!
+          <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin-top: 8px;">
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">🏁</span><span style="color: #aaa;">Start line</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">🏆</span><span style="color: #aaa;">Finish line</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">🚩</span><span style="color: #aaa;">Checkpoints</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">🔶</span><span style="color: #aaa;">Trampolines</span>
+            <span style="font-weight: bold; color: white; background: #333; padding: 2px 8px; border-radius: 4px; font-size: 13px;">🔺</span><span style="color: #aaa;">Spikes (hazard!)</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom: 24px;">
+        <h2 style="font-size: 16px; font-weight: bold; color: #ff69b4; margin: 0 0 12px 0;">👤 Profile Features</h2>
+        <div style="font-size: 14px; line-height: 1.6; color: #ccc;">
+          Sign in to save drawings, customize your character, and play multiplayer!
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(helpModal);
 
   // Create toolbar
   const toolbar = document.createElement('div');
@@ -2283,6 +2625,9 @@ export function initUI(): void {
   });
 
   console.log('[OpenOverlay] UI initialized');
+
+  // Check if we should show a periodic sign-in reminder
+  checkPeriodicSignInReminder();
 }
 
 function setupToolbarEvents(toolbar: HTMLElement): void {
@@ -2413,8 +2758,7 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   document.addEventListener('oo:textcreated', ((e: CustomEvent) => {
     console.log('[OpenOverlay] Text created with id:', e.detail.id);
     liveTextId = e.detail.id;
-    // Blur the input so canvas can receive pointer events for dragging
-    textInput?.blur();
+    // Don't blur - let user finish typing. They can click elsewhere to drag.
   }) as EventListener);
 
   // Reset when text is saved/cleared
@@ -2671,6 +3015,13 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   // Multiplayer setup button - resize window and start explore mode
   const mpButton = toolbar.querySelector('#oo-multiplayer-setup');
   mpButton?.addEventListener('click', async () => {
+    // Check if signed in
+    const user = getCurrentUser();
+    if (!user) {
+      showSignInReminder('Multiplayer requires sign-in');
+      return;
+    }
+
     const btn = mpButton as HTMLButtonElement;
     btn.textContent = '⏳';
     btn.disabled = true;
@@ -2685,10 +3036,10 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
         // Hide build tools
         const buildTools = toolbar.querySelector('.build-tools-section') as HTMLElement;
         if (buildTools) buildTools.style.display = 'none';
-        // Start explore mode
+        // Start explore mode (skip tag game - MP is just for window sync)
         gameSubMode = 'play';
         document.dispatchEvent(new CustomEvent('oo:gamemode', {
-          detail: { mode: 'play', playmode: 'explore' }
+          detail: { mode: 'play', playmode: 'explore', skipTagGame: true }
         }));
         setTimeout(() => {
           btn.textContent = '👥 MP';
@@ -2714,6 +3065,13 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   let tagModeActive = false;
 
   tagButton?.addEventListener('click', async () => {
+    // Check if signed in
+    const user = getCurrentUser();
+    if (!user) {
+      showSignInReminder('Tag game requires sign-in');
+      return;
+    }
+
     if (tagModeActive) {
       // Leave tag game
       document.dispatchEvent(new CustomEvent('oo:toggletag'));
@@ -2850,6 +3208,69 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
       console.error('[OpenOverlay] Sign out failed:', error);
     }
   });
+
+  // Help modal handlers (modal is outside Shadow DOM on document.body)
+  const helpModalEl = document.getElementById('oo-help-modal');
+  const helpCloseEl = document.getElementById('oo-help-close');
+  const helpContentEl = document.getElementById('oo-help-content');
+  const helpBtnLogin = shadowRoot.querySelector('#help-btn-login');
+  const helpBtnProfile = shadowRoot.querySelector('#help-btn-profile');
+
+  const openHelpModal = () => {
+    if (helpModalEl) {
+      helpModalEl.style.display = 'flex';
+    }
+  };
+
+  const closeHelpModal = () => {
+    if (helpModalEl) {
+      helpModalEl.style.display = 'none';
+    }
+  };
+
+  helpBtnLogin?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openHelpModal();
+  });
+  helpBtnProfile?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openHelpModal();
+  });
+  helpCloseEl?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeHelpModal();
+  });
+
+  // Close help modal when clicking outside content
+  helpModalEl?.addEventListener('click', (e) => {
+    if (e.target === helpModalEl) {
+      closeHelpModal();
+    }
+  });
+
+  // Prevent scroll from propagating to underlying page
+  // Allow scrolling inside content, but prevent page scroll when at edges
+  helpContentEl?.addEventListener('wheel', (e) => {
+    const el = e.currentTarget as HTMLElement;
+    const atTop = el.scrollTop <= 0;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+    const scrollingUp = e.deltaY < 0;
+    const scrollingDown = e.deltaY > 0;
+
+    // Only prevent default at edges to stop page scroll
+    if ((atTop && scrollingUp) || (atBottom && scrollingDown)) {
+      e.preventDefault();
+    }
+    e.stopPropagation();
+  }, { passive: false });
+
+  // Clicking on modal background (not content) closes it
+  helpModalEl?.addEventListener('wheel', (e) => {
+    if (e.target === helpModalEl) {
+      e.preventDefault();
+    }
+    e.stopPropagation();
+  }, { passive: false });
 
   // Screen name input
   const screenNameInput = shadowRoot.querySelector('#oo-screen-name') as HTMLInputElement;
@@ -3012,6 +3433,20 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
   const savedHatProfile = localStorage.getItem('oo_player_hat');
   if (savedHatProfile && profileHatSelect) {
     profileHatSelect.value = savedHatProfile;
+  }
+
+  // Accessory selection in profile
+  const profileAccessorySelect = shadowRoot.querySelector('#profile-accessory-select') as HTMLSelectElement;
+  profileAccessorySelect?.addEventListener('change', () => {
+    const accessory = profileAccessorySelect.value;
+    document.dispatchEvent(new CustomEvent('oo:playeraccessory', { detail: { accessory } }));
+    localStorage.setItem('oo_player_accessory', accessory);
+  });
+
+  // Restore saved accessory
+  const savedAccessory = localStorage.getItem('oo_player_accessory');
+  if (savedAccessory && profileAccessorySelect) {
+    profileAccessorySelect.value = savedAccessory;
   }
 
   // Respawn toggle in profile
@@ -3839,5 +4274,47 @@ export function highlightProfileButton(highlight: boolean): void {
       profileBtn.style.boxShadow = '';
       profileBtn.style.transform = '';
     }
+  }
+}
+
+// ============ INVITE CODE MODAL ============
+
+import { InviteCodeModal } from './components/InviteCodeModal';
+
+let inviteCodeModal: InviteCodeModal | null = null;
+
+/**
+ * Show the invite code modal
+ */
+export function showInviteCodeModal(onSuccess?: () => void): void {
+  if (!shadowRoot) {
+    console.error('[OpenOverlay] Cannot show invite modal: shadowRoot not initialized');
+    return;
+  }
+
+  // Create modal if it doesn't exist
+  if (!inviteCodeModal) {
+    inviteCodeModal = document.createElement('oo-invite-code-modal') as InviteCodeModal;
+    shadowRoot.appendChild(inviteCodeModal);
+  }
+
+  inviteCodeModal.show(onSuccess);
+}
+
+/**
+ * Hide the invite code modal
+ */
+export function hideInviteCodeModal(): void {
+  if (inviteCodeModal) {
+    inviteCodeModal.hide();
+  }
+}
+
+/**
+ * Skip invite code (for testing)
+ */
+export async function skipInviteCodeModal(): Promise<void> {
+  if (inviteCodeModal) {
+    await inviteCodeModal.skip();
   }
 }

@@ -17,7 +17,7 @@ let backgroundCanvas: HTMLCanvasElement | null = null;
 let backgroundCtx: CanvasRenderingContext2D | null = null;
 let isDrawing = false;
 let currentMode: 'none' | 'draw' | 'text' = 'none';
-let isGameMode = false;
+let gameMode: 'none' | 'build' | 'play' = 'none';
 
 // Stroke with element-relative coordinates
 interface Stroke {
@@ -362,9 +362,9 @@ export function initCanvas(): void {
   // Load saved visibility preferences
   loadVisibilityPrefs();
 
-  // Track game mode to avoid canvas undo/clear when in game (build OR play)
+  // Track game mode - only block undo in build mode (play/explore allows drawing undo)
   document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
-    isGameMode = e.detail.mode === 'build' || e.detail.mode === 'play';
+    gameMode = e.detail.mode || 'none';
     // Force redraw collision canvas when entering any game mode
     if (e.detail.mode === 'play' || e.detail.mode === 'build') {
       redraw();
@@ -1862,19 +1862,28 @@ function adjustColor(color: string, amount: number): string {
 }
 
 function undoStroke(): void {
-  // Skip if game mode is active - game handles its own undo
-  if (isGameMode) return;
+  console.log('[OpenOverlay] Undo called - gameMode:', gameMode, 'items:', items.length);
+
+  // Only skip if in build mode - game handles checkpoint undo there
+  // Play/explore mode allows drawing undo
+  if (gameMode === 'build') {
+    console.log('[OpenOverlay] Undo skipped - build mode active (game handles checkpoints)');
+    return;
+  }
 
   if (items.length > 0) {
-    items.pop();
+    const removed = items.pop();
+    console.log('[OpenOverlay] Undo - removed item type:', removed?.type, 'eraser:', (removed as any)?.eraser);
     redraw();
     console.log('[OpenOverlay] Undo - items remaining:', items.length);
+  } else {
+    console.log('[OpenOverlay] Undo - no items to undo');
   }
 }
 
 async function clearStrokes(): Promise<void> {
-  // Skip if game mode is active - game handles its own clear
-  if (isGameMode) return;
+  // Skip if build mode is active - game handles its own clear there
+  if (gameMode === 'build') return;
 
   // Mode-aware clearing: only clear items for the current mode
   if (currentMode === 'text') {
@@ -2274,4 +2283,14 @@ export function addExternalStroke(points: { x: number; y: number }[], color: str
   });
 
   redraw();
+}
+
+/**
+ * Remove the last stroke (used by onboarding to clean up demo line)
+ */
+export function removeLastStroke(): void {
+  if (items.length > 0) {
+    items.pop();
+    redraw();
+  }
 }

@@ -887,10 +887,12 @@ export interface RemotePlayer {
   animFrame: number;
   onGround: boolean;
   isDead: boolean;
+  isMoving: boolean; // Explicit moving state for consistent animation
   playerColor: string;
   playerHat: string;
   playerAccessory: string;
   isGirlMode: boolean;
+  faceStyle?: string;
   displayName: string;
   updatedAt: number;
   // Tag game fields
@@ -1109,16 +1111,6 @@ export async function tagPlayer(pageKey: string, targetPlayerId: string): Promis
   try {
     const tagGameRef = doc(db, 'pageGames', pageKey, 'gameState', 'tag');
 
-    // Verify we are currently "it" before transferring
-    const tagGameSnap = await getDoc(tagGameRef);
-    if (!tagGameSnap.exists()) return false;
-
-    const state = tagGameSnap.data() as TagGameState;
-    if (state.itPlayerId !== user.uid) {
-      console.log('[OpenOverlay] Cannot tag - you are not IT');
-      return false;
-    }
-
     // Transfer tag
     await setDoc(tagGameRef, {
       itPlayerId: targetPlayerId,
@@ -1197,6 +1189,193 @@ export async function submitFeedback(
     console.error('[OpenOverlay] Failed to submit feedback:', err);
     return false;
   }
+}
+
+// ============ INVITE CODES ============
+
+export interface InviteCode {
+  code: string;
+  createdBy: string;
+  createdAt: Timestamp;
+  expiresAt: Timestamp | null;
+  maxUses: number | null;
+  uses: number;
+  usedBy: string[];
+  isActive: boolean;
+}
+
+const INVITE_CODE_STORAGE_KEY = 'oo_invite_code_validated';
+const INVITE_CODE_VALUE_KEY = 'oo_invite_code_value';
+
+/**
+ * Check if user has already validated an invite code (cached locally)
+ */
+export async function hasValidatedInviteCode(): Promise<boolean> {
+  try {
+    const result = await chrome.storage.local.get([INVITE_CODE_STORAGE_KEY]);
+    return result[INVITE_CODE_STORAGE_KEY] === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the invite code the user used
+ */
+export async function getUsedInviteCode(): Promise<string | null> {
+  try {
+    const result = await chrome.storage.local.get([INVITE_CODE_VALUE_KEY]);
+    return result[INVITE_CODE_VALUE_KEY] || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate an invite code (check if it exists and is still valid)
+ */
+export async function validateInviteCode(code: string): Promise<{ valid: boolean; error?: string }> {
+  if (!db) {
+    console.log('[OpenOverlay] Cannot validate invite code: Firestore not initialized');
+    return { valid: false, error: 'Not connected' };
+  }
+
+  const normalizedCode = code.trim().toUpperCase();
+
+  if (!normalizedCode) {
+    return { valid: false, error: 'Please enter a code' };
+  }
+
+  try {
+    const codeRef = doc(db, 'inviteCodes', normalizedCode);
+    const codeSnap = await getDoc(codeRef);
+
+    if (!codeSnap.exists()) {
+      return { valid: false, error: 'Invalid invite code' };
+    }
+
+    const data = codeSnap.data() as InviteCode;
+
+    // Check if active
+    if (!data.isActive) {
+      return { valid: false, error: 'This code is no longer active' };
+    }
+
+    // Check expiration
+    if (data.expiresAt && data.expiresAt.toDate() < new Date()) {
+      return { valid: false, error: 'This code has expired' };
+    }
+
+    // Check usage limit
+    if (data.maxUses !== null && data.uses >= data.maxUses) {
+      return { valid: false, error: 'This code has reached its limit' };
+    }
+
+    return { valid: true };
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to validate invite code:', err);
+    return { valid: false, error: 'Failed to validate code' };
+  }
+}
+
+/**
+ * Redeem an invite code (mark it as used by this user)
+ */
+export async function redeemInviteCode(code: string): Promise<{ success: boolean; error?: string }> {
+  const user = getCurrentUser();
+  if (!db || !user) {
+    return { success: false, error: 'Not signed in' };
+  }
+
+  const normalizedCode = code.trim().toUpperCase();
+
+  // Validate first
+  const validation = await validateInviteCode(normalizedCode);
+  if (!validation.valid) {
+    return { success: false, error: validation.error };
+  }
+
+  try {
+    const codeRef = doc(db, 'inviteCodes', normalizedCode);
+
+    // Update the invite code document
+    await updateDoc(codeRef, {
+      uses: increment(1),
+      usedBy: [...(await getDoc(codeRef)).data()?.usedBy || [], user.uid],
+    });
+
+    // Update user profile with the code they used
+    const userRef = doc(db, 'users', user.uid);
+    await updateDoc(userRef, {
+      inviteCodeUsed: normalizedCode,
+      invitedAt: serverTimestamp(),
+    });
+
+    // Cache locally so we don't ask again
+    await chrome.storage.local.set({
+      [INVITE_CODE_STORAGE_KEY]: true,
+      [INVITE_CODE_VALUE_KEY]: normalizedCode,
+    });
+
+    console.log('[OpenOverlay] Invite code redeemed:', normalizedCode);
+    return { success: true };
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to redeem invite code:', err);
+    return { success: false, error: 'Failed to redeem code' };
+  }
+}
+
+/**
+ * Create a new invite code (admin function)
+ */
+export async function createInviteCode(
+  code: string,
+  options?: {
+    expiresAt?: Date;
+    maxUses?: number;
+  }
+): Promise<boolean> {
+  const user = getCurrentUser();
+  if (!db || !user) return false;
+
+  const normalizedCode = code.trim().toUpperCase();
+
+  try {
+    const codeRef = doc(db, 'inviteCodes', normalizedCode);
+    await setDoc(codeRef, {
+      code: normalizedCode,
+      createdBy: user.uid,
+      createdAt: serverTimestamp(),
+      expiresAt: options?.expiresAt ? Timestamp.fromDate(options.expiresAt) : null,
+      maxUses: options?.maxUses ?? null,
+      uses: 0,
+      usedBy: [],
+      isActive: true,
+    });
+
+    console.log('[OpenOverlay] Invite code created:', normalizedCode);
+    return true;
+  } catch (err) {
+    console.error('[OpenOverlay] Failed to create invite code:', err);
+    return false;
+  }
+}
+
+/**
+ * Skip invite code requirement (for bypassing during testing)
+ */
+export async function skipInviteCode(): Promise<void> {
+  await chrome.storage.local.set({
+    [INVITE_CODE_STORAGE_KEY]: true,
+    [INVITE_CODE_VALUE_KEY]: 'SKIPPED',
+  });
+}
+
+/**
+ * Clear invite code validation (for testing)
+ */
+export async function clearInviteCodeValidation(): Promise<void> {
+  await chrome.storage.local.remove([INVITE_CODE_STORAGE_KEY, INVITE_CODE_VALUE_KEY]);
 }
 
 // ============ COURSE SYNC (for multiplayer races) ============

@@ -82,8 +82,8 @@ let currentIdleAnim: IdleAnimType = 'none';
 let idleAnimFrame = 0;
 let idleAnimStartTime = 0;
 let nextIdleAnimTime = 0; // When to trigger next idle animation
-const IDLE_ANIM_MIN_DELAY = 3000; // At least 3 seconds between fidgets
-const IDLE_ANIM_MAX_DELAY = 8000; // At most 8 seconds between fidgets
+const IDLE_ANIM_MIN_DELAY = 30000; // At least 30 seconds between fidgets
+const IDLE_ANIM_MAX_DELAY = 90000; // At most 90 seconds between fidgets
 const IDLE_ANIM_DURATION = 1500; // Each fidget lasts 1.5 seconds
 
 // Standing pose variation (based on a random seed per session)
@@ -285,7 +285,7 @@ function dispatchCoursesUpdate(): void {
 // Game physics
 const GRAVITY = 0.6;
 const JUMP_FORCE = -12;  // Reduced slightly for smaller player
-const MOVE_SPEED = 4;    // 30% faster than previous 3
+const MOVE_SPEED = 6;    // Faster run speed
 const FRICTION = 0.7;    // Quick stop when not pressing keys
 const MAX_FALL_SPEED = 14; // Cap fall speed to prevent tunneling through platforms
 const COLLISION_SUBSTEP_SIZE = 6; // Max pixels per collision check step (smaller = more precise)
@@ -402,7 +402,7 @@ export function initGame(): void {
 
   // Listen for game mode changes
   document.addEventListener('oo:gamemode', ((e: CustomEvent) => {
-    setGameMode(e.detail.mode, e.detail.tool, e.detail.playmode, e.detail.spawnPos, e.detail.fromOnboarding);
+    setGameMode(e.detail.mode, e.detail.tool, e.detail.playmode, e.detail.spawnPos, e.detail.fromOnboarding, e.detail.skipTagGame);
   }) as EventListener);
 
   // Listen for undo/clear in build mode
@@ -507,6 +507,8 @@ export function initGame(): void {
   // Listen for tag game toggle
   document.addEventListener('oo:toggletag', () => {
     console.log('[OpenOverlay] Tag toggle requested, gameMode:', gameMode);
+    // Always reset skipTagGameMode when explicitly toggling tag
+    skipTagGameMode = false;
     if (gameMode !== 'play') {
       // Auto-switch to play mode (explore) when starting tag
       console.log('[OpenOverlay] Auto-switching to play mode for tag');
@@ -615,12 +617,16 @@ function resizeGameCanvas(): void {
 let initialSpawnPosition: { x: number; y: number } | null = null;
 let isFromOnboarding = false;
 
-function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode?: 'explore' | 'race', spawnPos?: { x: number; y: number }, fromOnboarding?: boolean): void {
+// Track if we should skip tag game (MP mode)
+let skipTagGameMode = false;
+
+function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode?: 'explore' | 'race', spawnPos?: { x: number; y: number }, fromOnboarding?: boolean, skipTagGame?: boolean): void {
   gameMode = mode;
   if (tool) buildTool = tool as any;
   if (newPlayMode) playMode = newPlayMode;
   if (spawnPos) initialSpawnPosition = spawnPos;
   isFromOnboarding = fromOnboarding || false;
+  skipTagGameMode = skipTagGame || false;
 
   // Flash mode info when entering play mode
   if (mode === 'play') {
@@ -737,6 +743,12 @@ function setGameMode(mode: 'none' | 'play' | 'build', tool?: string, newPlayMode
 
     // Subscribe to tag game state (will be null if no tag game active)
     subscribeToTagGame(pageKey, (state) => {
+      // Skip tag game entirely in MP mode (just window sync, no tag game)
+      if (skipTagGameMode) {
+        console.log('[OpenOverlay] Skipping tag game - MP mode only');
+        return;
+      }
+
       const prevState = tagGameState;
       tagGameState = state;
       console.log('[OpenOverlay] Tag game state changed:', state);
@@ -1729,6 +1741,7 @@ function syncPlayerToCloud(): void {
   }
 
   // Build sync data object
+  const isMovingNow = Math.abs(player.vx) > 0.5;
   const syncData: any = {
     x: player.x,
     y: player.y + player.height, // Send feet Y position
@@ -1738,6 +1751,7 @@ function syncPlayerToCloud(): void {
     animFrame: player.animFrame,
     onGround: player.onGround,
     isDead: isDead,
+    isMoving: isMovingNow, // Explicit moving state for consistent animation
     playerColor: playerColor,
     playerHat: playerHat,
     playerAccessory: playerAccessory,
@@ -1929,26 +1943,22 @@ function checkPlayerTagCollision(): void {
 
         // Update local state immediately
         localIsIt = false;
-
-        // Set explicit tag notification - this will be synced to tell the other player they were tagged
         pendingTaggedPlayerId = playerId;
         pendingTaggedAt = now;
+        localTagCooldownUntil = now + TAG_COOLDOWN;
 
-        // Try to update Firebase (may fail due to permissions)
+        // Update Firebase
         tagPlayer(pageKey, playerId).catch(() => {
-          console.log('[OpenOverlay] Firebase tag update failed, using local state');
+          console.log('[OpenOverlay] Firebase tag update failed');
         });
 
-        localTagCooldownUntil = now + TAG_COOLDOWN;
         showNotification('Tagged!', remote.displayName || 'Player', 1500);
         showNTBFlash();
 
-        // Dispatch state change event
         document.dispatchEvent(new CustomEvent('oo:tagstatechange', {
           detail: { isTagMode: true, isIt: false, gameActive: true }
         }));
 
-        // Force immediate sync to notify the tagged player
         syncPlayerToCloud();
       }
 
@@ -2385,7 +2395,7 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
   const displayY = interpolated ? interpolated.y : rp.y;
 
   const w = 30;
-  const h = 50;
+  const h = 41; // Match local player height
   const x = displayX;
   // displayY is the feet position, so subtract height to get top position
   const y = displayY - h;
@@ -2425,30 +2435,41 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
   gameCtx.shadowOffsetX = 2;
   gameCtx.shadowOffsetY = 2;
 
-  const isMoving = Math.abs(rp.vx) > 0.5;
+  // Use synced isMoving state for consistent animation (fallback to velocity check)
+  const isMoving = rp.isMoving ?? (Math.abs(rp.vx) > 0.5);
   const animFrame = rp.animFrame || 0;
 
   if (rp.isGirlMode) {
     // === GIRL CHARACTER - same detailed style as local player ===
+    const hairWiggle = Math.sin(animFrame * Math.PI * 2) * 3;
 
-    // 1. Draw hair first (back layer) - smooth rounded bob
+    // 1. Draw hair first (back layer)
     gameCtx.fillStyle = color;
     gameCtx.beginPath();
-    // Start at bottom left of hair
-    gameCtx.moveTo(centerX - headRadius - 2, headY + 8);
-    // Left side going up
-    gameCtx.lineTo(centerX - headRadius - 1, headY - 2);
-    // Curve over the top of head
-    gameCtx.quadraticCurveTo(centerX - headRadius + 2, headY - headRadius - 4, centerX, headY - headRadius - 3);
-    gameCtx.quadraticCurveTo(centerX + headRadius - 2, headY - headRadius - 4, centerX + headRadius + 1, headY - 2);
-    // Right side going down
-    gameCtx.lineTo(centerX + headRadius + 2, headY + 8);
-    // Curve back under
-    gameCtx.quadraticCurveTo(centerX + headRadius, headY + 10, centerX + headRadius - 2, headY + 10);
-    gameCtx.lineTo(centerX - headRadius + 2, headY + 10);
-    gameCtx.quadraticCurveTo(centerX - headRadius, headY + 10, centerX - headRadius - 2, headY + 8);
-    gameCtx.closePath();
-    gameCtx.fill();
+
+    if (isMoving) {
+      // Running: hair trails behind on the left side (will be flipped if facing left)
+      gameCtx.moveTo(centerX, headY - headRadius - 3);
+      gameCtx.quadraticCurveTo(centerX - headRadius + 2, headY - headRadius - 4, centerX - headRadius - 1, headY - 2);
+      gameCtx.lineTo(centerX - headRadius - 2, headY + 4);
+      gameCtx.quadraticCurveTo(centerX - headRadius - 4 - hairWiggle, headY + 8, centerX - headRadius - 3 - hairWiggle, headY + 12);
+      gameCtx.quadraticCurveTo(centerX - headRadius, headY + 11, centerX - headRadius + 3, headY + 10);
+      gameCtx.lineTo(centerX - 2, headY + headRadius);
+      gameCtx.closePath();
+      gameCtx.fill();
+    } else {
+      // Standing: symmetric bob hair
+      gameCtx.moveTo(centerX - headRadius - 2, headY + 8);
+      gameCtx.lineTo(centerX - headRadius - 1, headY - 2);
+      gameCtx.quadraticCurveTo(centerX - headRadius + 2, headY - headRadius - 4, centerX, headY - headRadius - 3);
+      gameCtx.quadraticCurveTo(centerX + headRadius - 2, headY - headRadius - 4, centerX + headRadius + 1, headY - 2);
+      gameCtx.lineTo(centerX + headRadius + 2, headY + 8);
+      gameCtx.quadraticCurveTo(centerX + headRadius, headY + 10, centerX + headRadius - 2, headY + 10);
+      gameCtx.lineTo(centerX - headRadius + 2, headY + 10);
+      gameCtx.quadraticCurveTo(centerX - headRadius, headY + 10, centerX - headRadius - 2, headY + 8);
+      gameCtx.closePath();
+      gameCtx.fill();
+    }
 
     // 2. Draw face circle (white/light filled)
     gameCtx.fillStyle = '#fff';
@@ -2467,7 +2488,7 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
     gameCtx.fill();
 
     // 4. Face features (on white face)
-    const remoteFaceStyle = (rp as any).faceStyle || 'smudgy';
+    const remoteFaceStyle = rp.faceStyle || 'smudgy';
     if (remoteFaceStyle === 'smudgy') {
       // For remote players, calculate look direction from velocity
       const remoteLookDir = rp.vx > 0.5 ? 1 : rp.vx < -0.5 ? -1 : 0;
@@ -2537,12 +2558,12 @@ function drawRemotePlayer(playerId: string, rp: RemotePlayer): void {
 
   } else {
     // === BOY CHARACTER - same detailed style as local player ===
-    const remoteFaceStyleBoy = (rp as any).faceStyle || 'smudgy';
+    const remoteFaceStyleBoy = rp.faceStyle || 'smudgy';
     const topOfHead = headY - headRadius;
 
     if (remoteFaceStyleBoy === 'smudgy') {
       // Draw hair FIRST (behind head)
-      const remoteAnimFrame = (rp as any).animFrame || 0;
+      const remoteAnimFrame = rp.animFrame || 0;
       gameCtx.strokeStyle = color;
       gameCtx.lineWidth = 2.5;
       gameCtx.lineCap = 'round';

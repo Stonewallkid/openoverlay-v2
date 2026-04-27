@@ -3,13 +3,16 @@
  * Simplified for debugging
  */
 
-import { initUI } from '@/ui';
+import { initUI, showInviteCodeModal } from '@/ui';
 import { initCanvas } from '@/canvas';
 import { initAnnotations } from '@/annotations';
 import { initGame } from '@/game';
 import { initAuth } from '@/auth';
-import { initFirestore } from '@/db';
-import { shouldShowOnboarding, startOnboarding, showReturningUserWave } from '@/onboarding';
+import { initFirestore, hasValidatedInviteCode } from '@/db';
+import { shouldShowOnboarding, startOnboarding, showReturningUserWave, loadOnboardingState } from '@/onboarding';
+
+// Feature flag: Set to true to require invite codes
+const REQUIRE_INVITE_CODE = false;
 
 // Prevent double injection
 if ((window as any).__OPENOVERLAY_V2__) {
@@ -41,8 +44,27 @@ if ((window as any).__OPENOVERLAY_V2__) {
       initGame();
       console.log('[OpenOverlay] Ready!');
 
-      // Trigger onboarding after a short delay
-      setTimeout(() => {
+      // Trigger onboarding/invite code check after a short delay
+      setTimeout(async () => {
+        // Load onboarding state from chrome.storage.local first
+        await loadOnboardingState();
+
+        // Check if invite code is required
+        if (REQUIRE_INVITE_CODE) {
+          const hasCode = await hasValidatedInviteCode();
+          if (!hasCode) {
+            // Show invite code modal first
+            showInviteCodeModal(() => {
+              // After successful code entry, show onboarding if needed
+              if (shouldShowOnboarding()) {
+                startOnboarding();
+              }
+            });
+            return;
+          }
+        }
+
+        // No invite code required or already validated
         if (shouldShowOnboarding()) {
           startOnboarding();
         } else {

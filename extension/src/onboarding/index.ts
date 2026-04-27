@@ -4,7 +4,8 @@
  */
 
 import { openMenu, getShadowRoot, getQuickExplorePosition, getProfileButtonPosition, highlightProfileButton, setModeExternal } from '@/ui';
-import { addExternalStroke } from '@/canvas';
+import { addExternalStroke, removeLastStroke } from '@/canvas';
+import { getCurrentUser } from '@/auth';
 
 /**
  * Highlight the FAB button during onboarding
@@ -32,12 +33,20 @@ function highlightFab(highlight: boolean): void {
 function highlightButton(index: number): void {
   const shadowRoot = getShadowRoot();
   if (!shadowRoot) return;
-  const minis = shadowRoot.querySelectorAll('.mini');
+  const minis = shadowRoot.querySelectorAll('.mini') as NodeListOf<HTMLElement>;
   // Clear all highlights first
-  minis.forEach(m => m.classList.remove('active'));
-  // Highlight the specified button
+  minis.forEach(m => {
+    m.classList.remove('active');
+    m.style.background = '';
+    m.style.boxShadow = '';
+    m.style.transform = '';
+  });
+  // Highlight the specified button with green glow
   if (minis[index]) {
     minis[index].classList.add('active');
+    minis[index].style.background = '#22c55e';
+    minis[index].style.boxShadow = '0 0 15px #22c55e, 0 0 30px #22c55e';
+    minis[index].style.transform = 'scale(1.15)';
   }
 }
 
@@ -47,16 +56,67 @@ function highlightButton(index: number): void {
 function clearButtonHighlights(): void {
   const shadowRoot = getShadowRoot();
   if (!shadowRoot) return;
-  const minis = shadowRoot.querySelectorAll('.mini');
-  minis.forEach(m => m.classList.remove('active'));
+  const minis = shadowRoot.querySelectorAll('.mini') as NodeListOf<HTMLElement>;
+  minis.forEach(m => {
+    m.classList.remove('active');
+    m.style.background = '';
+    m.style.boxShadow = '';
+    m.style.transform = '';
+  });
   highlightFab(false);
   highlightProfileButton(false);
 }
 
-// Storage keys
+// Storage keys (using chrome.storage.local for cross-site persistence)
 const STORAGE_KEY = 'oo_onboarding_complete';
 const SKIP_KEY = 'oo_onboarding_skipped';
-const SESSION_KEY = 'oo_onboarding_shown_this_session';
+const REMINDER_KEY = 'oo_onboarding_reminder_month'; // Tracks last reminder month (e.g., "2026-04")
+
+// Cached storage state (loaded async on init)
+let storageLoaded = false;
+let cachedComplete = false;
+let cachedSkipped = false;
+let cachedReminderMonth = '';
+
+/**
+ * Load onboarding state from chrome.storage.local
+ */
+export async function loadOnboardingState(): Promise<void> {
+  try {
+    const result = await chrome.storage.local.get([STORAGE_KEY, SKIP_KEY, REMINDER_KEY]);
+    cachedComplete = result[STORAGE_KEY] === true;
+    cachedSkipped = result[SKIP_KEY] === true;
+    cachedReminderMonth = result[REMINDER_KEY] || '';
+    storageLoaded = true;
+  } catch (e) {
+    console.error('[Smudgy] Failed to load onboarding state:', e);
+    storageLoaded = true;
+  }
+}
+
+/**
+ * Save onboarding complete state
+ */
+function markOnboardingComplete(): void {
+  cachedComplete = true;
+  chrome.storage.local.set({ [STORAGE_KEY]: true }).catch(console.error);
+}
+
+/**
+ * Save onboarding skipped state
+ */
+function markOnboardingSkipped(): void {
+  cachedSkipped = true;
+  chrome.storage.local.set({ [SKIP_KEY]: true }).catch(console.error);
+}
+
+/**
+ * Save reminder month
+ */
+function saveReminderMonth(month: string): void {
+  cachedReminderMonth = month;
+  chrome.storage.local.set({ [REMINDER_KEY]: month }).catch(console.error);
+}
 
 // Physics constants
 const SMUDGY_SPEED = 5;
@@ -118,15 +178,48 @@ let groundY = 0;
 // Motion line history for trail effect
 let motionHistory: { x: number; y: number }[] = [];
 
+// Fade out state for end of demo
+let fadeOpacity = 1;
+let countdownShown = false;
+let countdownElement: HTMLDivElement | null = null;
+
 /**
  * Check if onboarding should be shown
  */
 export function shouldShowOnboarding(): boolean {
-  // Already completed or skipped
-  if (localStorage.getItem(STORAGE_KEY) === 'true') return false;
-  if (localStorage.getItem(SKIP_KEY) === 'true') return false;
-  // Already shown this session (for returning user wave)
-  if (sessionStorage.getItem(SESSION_KEY) === 'true') return false;
+  // Wait for storage to load
+  if (!storageLoaded) {
+    return false;
+  }
+
+  // First time user - never completed or skipped onboarding
+  if (!cachedComplete && !cachedSkipped) {
+    return true;
+  }
+
+  // User has completed/skipped before - check for monthly reminder on the 10th
+  const today = new Date();
+  const dayOfMonth = today.getDate();
+
+  // Only show reminder on the 10th
+  if (dayOfMonth !== 10) {
+    return false;
+  }
+
+  // Only show if not logged in
+  const user = getCurrentUser();
+  if (user) {
+    return false;
+  }
+
+  // Check if we already showed the reminder this month
+  const currentMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  if (cachedReminderMonth === currentMonth) {
+    return false;
+  }
+
+  // Show the reminder and mark this month
+  saveReminderMonth(currentMonth);
   return true;
 }
 
@@ -135,9 +228,6 @@ export function shouldShowOnboarding(): boolean {
  */
 export function startOnboarding(): void {
   console.log('[Smudgy] Starting onboarding...');
-
-  // Mark as shown this session
-  sessionStorage.setItem(SESSION_KEY, 'true');
 
   // Calculate ground position
   groundY = window.innerHeight - GROUND_Y_OFFSET;
@@ -166,6 +256,14 @@ export function startOnboarding(): void {
   selfDrawProgress = 0;
   fullLine = [];
 
+  // Reset fade state
+  fadeOpacity = 1;
+  countdownShown = false;
+  if (countdownElement) {
+    countdownElement.remove();
+    countdownElement = null;
+  }
+
   // Create overlay canvas
   createCanvas();
   createSkipButton();
@@ -175,7 +273,7 @@ export function startOnboarding(): void {
     // Only mark complete if we've gotten past the intro (step > 0)
     if (state.step > 0 && !state.isComplete && !state.isSkipped) {
       console.log('[Smudgy] Menu closed - onboarding complete!');
-      localStorage.setItem(STORAGE_KEY, 'true');
+      markOnboardingComplete();
       cleanup();
       window.removeEventListener('oo:menuClosed', handleMenuClose);
     }
@@ -238,7 +336,7 @@ function createSkipButton(): void {
   });
   skipButton.addEventListener('click', () => {
     state.isSkipped = true;
-    localStorage.setItem(SKIP_KEY, 'true');
+    markOnboardingSkipped();
     cleanup();
   });
   document.body.appendChild(skipButton);
@@ -259,6 +357,105 @@ function cleanup(): void {
   }
   clearButtonHighlights();
   state.isComplete = true;
+
+  // Remove the demo line from the canvas
+  removeLastStroke();
+
+  // Exit explore/game mode so the character stops falling
+  document.dispatchEvent(new CustomEvent('oo:gamemode', { detail: { mode: 'none' } }));
+
+  // Show "Demo over" notification
+  showDemoOverNotification();
+}
+
+/**
+ * Show countdown notification with 3, 2, 1 timer
+ */
+function showCountdownNotification(): void {
+  countdownElement = document.createElement('div');
+  countdownElement.style.cssText = `
+    position: fixed;
+    top: 30%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #ff69b4, #d45a9d);
+    color: white;
+    padding: 16px 32px;
+    border-radius: 12px;
+    font-family: "Comic Sans MS", "Chalkboard SE", cursive;
+    font-size: 20px;
+    font-weight: bold;
+    z-index: 2147483647;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    text-align: center;
+    animation: popIn 0.3s ease;
+  `;
+  countdownElement.innerHTML = `
+    <div>Demo over in <span id="countdown-num">3</span>...</div>
+    <div style="font-size: 13px; margin-top: 6px; opacity: 0.9;">Your turn next!</div>
+  `;
+  document.body.appendChild(countdownElement);
+
+  // Countdown animation
+  const numSpan = countdownElement.querySelector('#countdown-num');
+  setTimeout(() => { if (numSpan) numSpan.textContent = '2'; }, 1000);
+  setTimeout(() => { if (numSpan) numSpan.textContent = '1'; }, 2000);
+}
+
+/**
+ * Show a notification that the demo is over
+ */
+function showDemoOverNotification(): void {
+  // Remove countdown if it exists
+  if (countdownElement) {
+    countdownElement.remove();
+    countdownElement = null;
+  }
+
+  const notification = document.createElement('div');
+  notification.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: linear-gradient(135deg, #ff69b4, #d45a9d);
+    color: white;
+    padding: 20px 40px;
+    border-radius: 16px;
+    font-family: "Comic Sans MS", "Chalkboard SE", cursive;
+    font-size: 24px;
+    font-weight: bold;
+    z-index: 2147483647;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    text-align: center;
+    animation: popIn 0.3s ease;
+  `;
+  notification.innerHTML = `
+    <div>Your turn!</div>
+    <div style="font-size: 14px; margin-top: 8px; opacity: 0.9;">✏️ Pencil to draw &nbsp;|&nbsp; 🏃 Pink button to run</div>
+  `;
+  document.body.appendChild(notification);
+
+  // Add animation keyframes
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes popIn {
+      0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+      100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+    }
+  `;
+  document.head.appendChild(style);
+
+  // Fade out and remove after 2.5 seconds
+  setTimeout(() => {
+    notification.style.transition = 'opacity 0.5s, transform 0.5s';
+    notification.style.opacity = '0';
+    notification.style.transform = 'translate(-50%, -50%) scale(0.9)';
+    setTimeout(() => {
+      notification.remove();
+      style.remove();
+    }, 500);
+  }, 2500);
 }
 
 /**
@@ -454,83 +651,30 @@ function updateStep(dt: number): void {
       }
       break;
 
-    case 2: // Run toward FAB area and stop near it
+    case 2: // Run toward FAB area, open menu, jump to draw button
       if (state.smudgyX >= fabPos.x - 80) {
-        // Stop running, prepare to jump to FAB
+        // Stop running, open menu
         state.smudgyVx = 0;
-        state.step = 3;
-        state.stepTimer = 0;
-        // Open menu before the jump
         openMenu();
-      }
-      break;
-
-    case 3: // Wait for menu to open, then jump onto FAB
-      if (state.stepTimer > 500) {
-        // Jump toward FAB
-        state.smudgyVy = JUMP_FORCE * 0.6; // Smaller jump
-        state.smudgyVx = 3; // Move right toward FAB
-        state.onGround = false;
-        state.step = 4;
-        state.stepTimer = 0;
-      }
-      break;
-
-    case 4: // In air, landing on FAB
-      // Guide toward FAB horizontally
-      if (state.smudgyX < fabPos.x - 5) {
-        state.smudgyVx = 3;
-      } else if (state.smudgyX > fabPos.x + 5) {
-        state.smudgyVx = -2;
-      } else {
-        state.smudgyVx = 0;
-      }
-
-      // Debug: log positions every 30 frames
-      if (Math.floor(state.stepTimer / 500) !== Math.floor((state.stepTimer - dt * 16.67) / 500)) {
-        console.log(`[Smudgy] Step 4: smudgyY=${state.smudgyY.toFixed(0)}, fabPos.y=${fabPos.y.toFixed(0)}, vy=${state.smudgyVy.toFixed(1)}`);
-      }
-
-      // Land on FAB when falling and near FAB position
-      // FAB center is fabPos.y, so top of FAB is around fabPos.y - 28 (button radius)
-      // Smudgy height is ~38, so land when smudgyY reaches fabPos.y - 28 - 5 (some tolerance)
-      if (state.smudgyVy > 0 && state.smudgyY >= fabPos.y - 70) {
-        // Land on top of FAB
-        state.smudgyX = fabPos.x;
-        state.smudgyY = fabPos.y - 65; // Stand on top of FAB
-        state.smudgyVx = 0;
-        state.smudgyVy = 0;
-        state.onGround = true;
-        state.step = 5;
-        state.stepTimer = 0;
-        // Highlight the FAB green - VISIBLE!
-        highlightFab(true);
-        console.log('[Smudgy] Landed on FAB at Y=' + state.smudgyY.toFixed(0) + ', turning green!');
-      }
-      break;
-
-    case 5: // On FAB (green!), wait then jump to draw button
-      // Stay on FAB for 1.5 seconds so user can see it's green
-      if (state.stepTimer > 1500) {
-        // Clear FAB highlight before jumping
-        highlightFab(false);
-        // Jump up toward draw button
-        state.smudgyVy = JUMP_FORCE * 0.7;
+        // Jump straight to draw button
+        state.smudgyVy = JUMP_FORCE * 0.8;
         state.onGround = false;
         state.step = 6;
         state.stepTimer = 0;
       }
       break;
 
+    // Steps 3, 4, 5 removed - jumping straight to draw button now
+
     case 6: // Jumping to draw button
       // Move toward draw button while in air
       const dxDraw = drawBtnPos.x - state.smudgyX;
       if (Math.abs(dxDraw) > 5) {
-        state.smudgyVx = dxDraw * 0.1;
+        state.smudgyVx = dxDraw * 0.15;
       }
 
       // When falling and past peak, land on draw button
-      if (state.smudgyVy > 0 && state.stepTimer > 200) {
+      if (state.smudgyVy > 0 && state.stepTimer > 300) {
         // Land on draw button
         state.smudgyX = drawBtnPos.x;
         state.smudgyY = drawBtnPos.y - 25;
@@ -540,7 +684,7 @@ function updateStep(dt: number): void {
         state.step = 7;
         state.stepTimer = 0;
         showSpeech("draw here!");
-        // Highlight the draw button (index 0)
+        // Highlight the draw button GREEN
         highlightButton(0);
         // Open the draw toolbar
         setModeExternal('draw');
@@ -662,11 +806,25 @@ function updateStep(dt: number): void {
       }
       break;
 
-    case 11: // On quick explore button, wait for game Smudgy to fall and land
-      // Wait for speech + time for game Smudgy to fall (~1.5 sec)
-      if (state.stepTimer > SPEECH_DURATION + 1000) {
-        // Game Smudgy should have landed by now - cleanup onboarding Smudgy
-        localStorage.setItem(STORAGE_KEY, 'true');
+    case 11: // On quick explore button, let user play for 6 seconds
+      const PLAY_TIME = 6000; // 6 seconds total
+      const COUNTDOWN_START = 3000; // Show countdown at 3 seconds
+
+      // At 3 seconds, show countdown and start fading
+      if (state.stepTimer > COUNTDOWN_START && !countdownShown) {
+        countdownShown = true;
+        showCountdownNotification();
+      }
+
+      // Fade out during last 3 seconds
+      if (state.stepTimer > COUNTDOWN_START) {
+        const fadeProgress = (state.stepTimer - COUNTDOWN_START) / (PLAY_TIME - COUNTDOWN_START);
+        fadeOpacity = Math.max(0, 1 - fadeProgress);
+      }
+
+      // At 6 seconds, cleanup
+      if (state.stepTimer > PLAY_TIME) {
+        markOnboardingComplete();
         cleanup();
       }
       break;
@@ -681,6 +839,10 @@ function render(): void {
 
   // Clear canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Apply fade opacity for end of demo
+  ctx.save();
+  ctx.globalAlpha = fadeOpacity;
 
   // Draw the self-drawing ground line (from draw button demo)
   if (selfDrawLine.length > 1) {
@@ -708,6 +870,8 @@ function render(): void {
   if (state.speechBubble) {
     drawSpeechBubble(state.smudgyX, state.smudgyY - 60, state.speechBubble);
   }
+
+  ctx.restore();
 }
 
 /**
