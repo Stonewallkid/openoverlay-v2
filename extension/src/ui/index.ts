@@ -2287,6 +2287,26 @@ export function initUI(): void {
         </div>
       </div>
       <div class="profile-settings">
+        <div class="profile-settings-header">Smudgy's Home</div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Show home</span>
+          <div class="toggle-switch active" id="toggle-home" title="Show or hide Smudgy's home"></div>
+        </div>
+        <div class="profile-setting-row">
+          <span class="profile-setting-label">Furniture</span>
+          <select class="profile-select" id="profile-furniture-select">
+            <option value="hammock">🌴 Hammock</option>
+            <option value="bed">🛏️ Bed</option>
+            <option value="couch">🛋️ Couch</option>
+            <option value="beanbag">🫘 Beanbag</option>
+            <option value="campfire">🔥 Campfire</option>
+            <option value="trampoline">🤸 Trampoline</option>
+            <option value="gym">💪 Gym</option>
+            <option value="none">🏠 Empty</option>
+          </select>
+        </div>
+      </div>
+      <div class="profile-settings">
         <div class="profile-settings-header">Drawing Visibility</div>
         <div class="profile-setting-row">
           <span class="profile-setting-label">Show all drawings</span>
@@ -3461,6 +3481,35 @@ function setupToolbarEvents(toolbar: HTMLElement): void {
     localStorage.setItem('oo_explore_respawn', shouldRespawn ? 'true' : 'false');
     document.dispatchEvent(new CustomEvent('oo:respawnsetting', { detail: { respawn: shouldRespawn } }));
   });
+
+  // Smudgy's Home settings
+  const homeToggle = shadowRoot.querySelector('#toggle-home') as HTMLElement;
+  const furnitureSelect = shadowRoot.querySelector('#profile-furniture-select') as HTMLSelectElement;
+
+  // Restore home visibility from localStorage
+  const savedHomeVisible = localStorage.getItem('oo_home_visible') !== 'false'; // Default true
+  if (!savedHomeVisible) {
+    homeToggle?.classList.remove('active');
+  }
+
+  homeToggle?.addEventListener('click', () => {
+    homeToggle.classList.toggle('active');
+    const showHome = homeToggle.classList.contains('active');
+    localStorage.setItem('oo_home_visible', showHome ? 'true' : 'false');
+    document.dispatchEvent(new CustomEvent('oo:togglehome'));
+  });
+
+  // Furniture selection
+  furnitureSelect?.addEventListener('change', () => {
+    const furniture = furnitureSelect.value;
+    document.dispatchEvent(new CustomEvent('oo:homefurniture', { detail: { furniture } }));
+  });
+
+  // Restore saved furniture
+  const savedFurniture = localStorage.getItem('oo_home_furniture');
+  if (savedFurniture && furnitureSelect) {
+    furnitureSelect.value = savedFurniture;
+  }
 
   // Body part color picker in profile
   const colorSwatchesContainer = shadowRoot.querySelector('#profile-color-swatches');
